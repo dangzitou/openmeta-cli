@@ -1,5 +1,6 @@
 import inquirer from 'inquirer';
 import select from '@inquirer/select';
+import chalk from 'chalk';
 import type { AppConfig } from '../types/index.js';
 import { githubService, llmService } from '../services/index.js';
 import { configService, logger } from '../infra/index.js';
@@ -10,6 +11,37 @@ interface LLMProviderOption {
   baseUrl: string;
   models: Array<{ name: string; value: string }>;
 }
+
+const BANNER = `
+${chalk.bold.cyan('  ╔═══════════════════════════════════════╗')}
+${chalk.bold.cyan('  ║         Welcome to OpenMeta CLI       ║')}
+${chalk.bold.cyan('  ╚═══════════════════════════════════════╝')}
+`;
+
+const WELCOME_TEXT = `
+  ${chalk.cyan('◆')} ${chalk.white('Your daily open source growth companion')}
+
+  This tool helps you:
+  ${chalk.gray('  •')} Find relevant GitHub issues to contribute
+  ${chalk.gray('  •')} Generate meaningful daily commits automatically
+  ${chalk.gray('  •')} Track your open source contribution journey
+
+${chalk.gray('─'.repeat(50))}
+${chalk.bold.cyan("  Let's get started!")}
+${chalk.gray('─'.repeat(50))}
+`;
+
+const SUCCESS_BANNER = `
+${chalk.green('  ╔═══════════════════════════════════════╗')}
+${chalk.green('  ║         ✅  Setup Complete!           ║')}
+${chalk.green('  ╚═══════════════════════════════════════╝')}
+`;
+
+const STEP_DIVIDER = (step: string) => `
+${chalk.cyan('─'.repeat(50))}
+${chalk.bold.cyan(step)}
+${chalk.cyan('─'.repeat(50))}
+`;
 
 const LLM_PROVIDERS: LLMProviderOption[] = [
   {
@@ -37,11 +69,12 @@ const LLM_PROVIDERS: LLMProviderOption[] = [
 
 export class InitOrchestrator {
   async execute(): Promise<void> {
-    logger.info('Starting OpenMeta CLI initialization...');
+    console.log(BANNER);
+    console.log(WELCOME_TEXT);
 
     const config = await configService.get();
 
-    console.log('\n=== Step 1: GitHub Configuration ===\n');
+    console.log(STEP_DIVIDER('STEP 1  ·  GitHub Configuration'));
 
     let pat = '';
     let username = '';
@@ -55,36 +88,37 @@ export class InitOrchestrator {
       ghValid = await githubService.validateCredentials();
 
       if (!ghValid) {
-        console.log('\n❌ GitHub token validation failed. Please check your PAT and try again.\n');
-        console.log('Make sure your PAT has the following permissions:');
-        console.log('  - repo (Full repository access)');
-        console.log('  - user (Read user profile info)\n');
+        console.log(`\n  ${chalk.red('✖')} ${chalk.red('GitHub token validation failed')}\n`);
+        console.log(`  ${chalk.gray('→')} ${chalk.white('Make sure your PAT has permissions:')}`);
+        console.log(`    ${chalk.gray('•')} repo (Full repository access)`);
+        console.log(`    ${chalk.gray('•')} user (Read user profile info)\n`);
         const { retry } = await inquirer.prompt<{ retry: boolean }>([
           {
             type: 'confirm',
             name: 'retry',
-            message: 'Do you want to try again?',
+            message: '  Try again?',
             default: true,
           },
         ]);
         if (!retry) {
-          logger.info('Initialization cancelled');
+          console.log(`\n  ${chalk.gray('›')} ${chalk.gray('Initialization cancelled')}\n`);
           return;
         }
       }
     }
 
-    console.log('\n=== Step 2: LLM API Configuration ===\n');
+    console.log(STEP_DIVIDER('STEP 2  ·  LLM API Configuration'));
 
     let providerValue = '';
     let selectedProvider: LLMProviderOption | undefined;
     let modelValue = '';
+    let apiKey = '';
     let llmValid = false;
 
     while (!llmValid) {
       // Step 2a: Select provider
       providerValue = await select({
-        message: 'Select LLM provider:',
+        message: '  Select LLM provider:',
         choices: LLM_PROVIDERS.map(p => ({
           name: p.name,
           value: p.value,
@@ -96,47 +130,44 @@ export class InitOrchestrator {
         throw new Error(`Provider not found: ${providerValue}`);
       }
 
-      console.log(`Selected provider: ${selectedProvider.name}`);
-
       // Step 2b: Select model
       modelValue = await select({
-        message: 'Select model:',
+        message: '  Select model:',
         choices: selectedProvider.models.map(m => ({
           name: m.name,
           value: m.value,
         })),
       });
 
-      console.log(`Selected model: ${modelValue}`);
-
       // Step 2c: Enter API key
-      const apiKey = await this.promptAPIKey();
+      apiKey = await this.promptAPIKey();
 
       // Step 2d: Validate connection
       llmService.initialize(apiKey, selectedProvider.baseUrl, modelValue);
       llmValid = await llmService.validateConnection();
 
       if (!llmValid) {
-        console.log('\n❌ LLM API connection failed. Please check your API key.\n');
+        console.log(`\n  ${chalk.red('✖')} ${chalk.red('LLM API connection failed')}`);
+        console.log(`  ${chalk.gray('→')} ${chalk.white('Please check your API key and try again')}\n`);
         const { retry } = await inquirer.prompt<{ retry: boolean }>([
           {
             type: 'confirm',
             name: 'retry',
-            message: 'Do you want to try again?',
+            message: '  Try again?',
             default: true,
           },
         ]);
         if (!retry) {
-          logger.info('Initialization cancelled');
+          console.log(`\n  ${chalk.gray('›')} ${chalk.gray('Initialization cancelled')}\n`);
           return;
         }
       }
     }
 
-    console.log('\n=== Step 3: User Profile ===\n');
+    console.log(STEP_DIVIDER('STEP 3  ·  User Profile'));
 
     const techStack = await select({
-      message: 'Select your tech stack:',
+      message: '  Select your tech stack:',
       choices: [
         { name: 'TypeScript, React, Node.js', value: 'TypeScript,React,Node.js' },
         { name: 'Python, Django, FastAPI', value: 'Python,Django,FastAPI' },
@@ -150,7 +181,7 @@ export class InitOrchestrator {
     });
 
     const focusAreas = await select({
-      message: 'Select your focus areas:',
+      message: '  Select your focus areas:',
       choices: [
         { name: 'Web Development', value: 'web-dev' },
         { name: 'Backend / API', value: 'backend' },
@@ -163,13 +194,13 @@ export class InitOrchestrator {
       ],
     });
 
-    console.log('\n=== Step 4: Target Repository (Optional) ===\n');
+    console.log(STEP_DIVIDER('STEP 4  ·  Target Repository (Optional)'));
 
     const { targetRepoPath } = await inquirer.prompt<{ targetRepoPath: string }>([
       {
         type: 'input',
         name: 'targetRepoPath',
-        message: 'Enter the absolute path to your target private repository (optional, press Enter to skip):',
+        message: '  Enter path to your private repository (optional):',
         default: '',
       },
     ]);
@@ -195,9 +226,9 @@ export class InitOrchestrator {
 
     await configService.save(newConfig);
 
-    logger.success('\nInitialization completed successfully!');
-    console.log(`\nConfiguration saved to: ${configService.getConfigPath()}`);
-    console.log('\nYou can now run "openmeta daily" to start your daily contribution.');
+    console.log(SUCCESS_BANNER);
+    console.log(`  ${chalk.green('✔')} ${chalk.white('Configuration saved to:')} ${chalk.gray(configService.getConfigPath())}`);
+    console.log(`\n  ${chalk.white('Run')} ${chalk.cyan('openmeta daily')} ${chalk.white('to start your daily contribution!')}\n`);
   }
 
   private async promptGitHubPAT(): Promise<string> {
