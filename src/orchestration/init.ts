@@ -33,26 +33,6 @@ const LLM_PROVIDERS: LLMProviderOption[] = [
       { name: 'MiniMax-M2', value: 'MiniMax-M2' },
     ],
   },
-  {
-    name: 'SiliconFlow',
-    value: 'siliconflow',
-    baseUrl: 'https://api.siliconflow.cn/v1',
-    models: [
-      { name: 'Qwen/Qwen2.5-72B-Instruct', value: 'Qwen/Qwen2.5-72B-Instruct' },
-      { name: 'deepseek-ai/DeepSeek-V2.5', value: 'deepseek-ai/DeepSeek-V2.5' },
-      { name: 'THUDM/glm-4-9b-chat', value: 'THUDM/glm-4-9b-chat' },
-    ],
-  },
-  {
-    name: 'Groq',
-    value: 'groq',
-    baseUrl: 'https://api.groq.com/openai/v1',
-    models: [
-      { name: 'llama-3.1-70b-versatile', value: 'llama-3.1-70b-versatile' },
-      { name: 'mixtral-8x7b-32768', value: 'mixtral-8x7b-32768' },
-      { name: 'llama3-70b-8192', value: 'llama3-70b-8192' },
-    ],
-  },
 ];
 
 export class InitOrchestrator {
@@ -63,85 +43,93 @@ export class InitOrchestrator {
 
     console.log('\n=== Step 1: GitHub Configuration ===\n');
 
-    const pat = await this.promptGitHubPAT();
-    const username = await this.promptUsername();
+    let pat = '';
+    let username = '';
+    let ghValid = false;
 
-    githubService.initialize(pat, username);
-    const ghValid = await githubService.validateCredentials();
-    if (!ghValid) {
-      console.log('\n❌ GitHub token validation failed. Please check your PAT and try again.\n');
-      console.log('Make sure your PAT has the following permissions:');
-      console.log('  - repo (Full repository access)');
-      console.log('  - user (Read user profile info)\n');
-      const { retry } = await inquirer.prompt<{ retry: boolean }>([
-        {
-          type: 'confirm',
-          name: 'retry',
-          message: 'Do you want to try again?',
-          default: true,
-        },
-      ]);
-      if (retry) {
-        await this.execute();
-        return;
-      } else {
-        logger.info('Initialization cancelled');
-        return;
+    while (!ghValid) {
+      pat = await this.promptGitHubPAT();
+      username = await this.promptUsername();
+
+      githubService.initialize(pat, username);
+      ghValid = await githubService.validateCredentials();
+
+      if (!ghValid) {
+        console.log('\n❌ GitHub token validation failed. Please check your PAT and try again.\n');
+        console.log('Make sure your PAT has the following permissions:');
+        console.log('  - repo (Full repository access)');
+        console.log('  - user (Read user profile info)\n');
+        const { retry } = await inquirer.prompt<{ retry: boolean }>([
+          {
+            type: 'confirm',
+            name: 'retry',
+            message: 'Do you want to try again?',
+            default: true,
+          },
+        ]);
+        if (!retry) {
+          logger.info('Initialization cancelled');
+          return;
+        }
       }
     }
 
     console.log('\n=== Step 2: LLM API Configuration ===\n');
 
-    // Step 2a: Select provider
-    const providerValue = await select({
-      message: 'Select LLM provider:',
-      choices: LLM_PROVIDERS.map(p => ({
-        name: p.name,
-        value: p.value,
-      })),
-    });
+    let providerValue = '';
+    let selectedProvider: LLMProviderOption | undefined;
+    let modelValue = '';
+    let llmValid = false;
 
-    // Find the selected provider
-    const selectedProvider = LLM_PROVIDERS.find(p => p.value === providerValue);
-    if (!selectedProvider) {
-      throw new Error(`Provider not found: ${providerValue}`);
-    }
+    while (!llmValid) {
+      // Step 2a: Select provider
+      providerValue = await select({
+        message: 'Select LLM provider:',
+        choices: LLM_PROVIDERS.map(p => ({
+          name: p.name,
+          value: p.value,
+        })),
+      });
 
-    console.log(`Selected provider: ${selectedProvider.name}`);
+      selectedProvider = LLM_PROVIDERS.find(p => p.value === providerValue);
+      if (!selectedProvider) {
+        throw new Error(`Provider not found: ${providerValue}`);
+      }
 
-    // Step 2b: Select model
-    const modelValue = await select({
-      message: 'Select model:',
-      choices: selectedProvider.models.map(m => ({
-        name: m.name,
-        value: m.value,
-      })),
-    });
+      console.log(`Selected provider: ${selectedProvider.name}`);
 
-    console.log(`Selected model: ${modelValue}`);
+      // Step 2b: Select model
+      modelValue = await select({
+        message: 'Select model:',
+        choices: selectedProvider.models.map(m => ({
+          name: m.name,
+          value: m.value,
+        })),
+      });
 
-    // Step 2c: Enter API key
-    const apiKey = await this.promptAPIKey();
+      console.log(`Selected model: ${modelValue}`);
 
-    // Step 2d: Validate connection
-    llmService.initialize(apiKey, selectedProvider.baseUrl, modelValue);
-    const llmValid = await llmService.validateConnection();
-    if (!llmValid) {
-      console.log('\n❌ LLM API connection failed. Please check your API key.\n');
-      const { retry } = await inquirer.prompt<{ retry: boolean }>([
-        {
-          type: 'confirm',
-          name: 'retry',
-          message: 'Do you want to try again?',
-          default: true,
-        },
-      ]);
-      if (retry) {
-        await this.execute();
-        return;
-      } else {
-        logger.info('Initialization cancelled');
-        return;
+      // Step 2c: Enter API key
+      const apiKey = await this.promptAPIKey();
+
+      // Step 2d: Validate connection
+      llmService.initialize(apiKey, selectedProvider.baseUrl, modelValue);
+      llmValid = await llmService.validateConnection();
+
+      if (!llmValid) {
+        console.log('\n❌ LLM API connection failed. Please check your API key.\n');
+        const { retry } = await inquirer.prompt<{ retry: boolean }>([
+          {
+            type: 'confirm',
+            name: 'retry',
+            message: 'Do you want to try again?',
+            default: true,
+          },
+        ]);
+        if (!retry) {
+          logger.info('Initialization cancelled');
+          return;
+        }
       }
     }
 
@@ -199,7 +187,7 @@ export class InitOrchestrator {
       },
       llm: {
         provider: providerValue as 'openai' | 'minimax',
-        apiBaseUrl: selectedProvider.baseUrl,
+        apiBaseUrl: selectedProvider!.baseUrl,
         apiKey,
         modelName: modelValue,
       },

@@ -1,6 +1,5 @@
 export interface UserProfile {
   techStack: string[];
-  proficiency?: string;
   focusAreas: string[];
 }
 
