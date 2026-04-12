@@ -7,7 +7,7 @@ export class LLMService {
   private client: OpenAI | null = null;
   private modelName: string = 'gpt-4o-mini';
 
-  initialize(apiKey: string, baseUrl: string, _provider?: string, modelName?: string): void {
+  initialize(apiKey: string, baseUrl: string, modelName?: string): void {
     this.client = new OpenAI({
       apiKey,
       baseURL: baseUrl,

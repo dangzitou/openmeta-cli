@@ -1,22 +1,49 @@
 import inquirer from 'inquirer';
-import type { AppConfig, ProficiencyLevel, LLMProvider } from '../types/index.js';
+import type { AppConfig, ProficiencyLevel } from '../types/index.js';
 import { githubService, llmService } from '../services/index.js';
 import { configService, logger } from '../infra/index.js';
 
-const MINIMAX_OPENAI_BASE_URL = 'https://api.minimaxi.com/v1';
-const MINIMAX_MODELS = [
-  { name: 'MiniMax-M2.7 (Latest, Fast)', value: 'MiniMax-M2.7' },
-  { name: 'MiniMax-M2.5', value: 'MiniMax-M2.5' },
-  { name: 'MiniMax-M2.1', value: 'MiniMax-M2.1' },
-  { name: 'MiniMax-M2', value: 'MiniMax-M2' },
+interface LLMProviderOption {
+  name: string;
+  value: string;
+  baseUrl: string;
+}
+
+interface LLMModelOption {
+  name: string;
+  value: string;
+}
+
+const LLM_PROVIDERS: LLMProviderOption[] = [
+  { name: 'OpenAI', value: 'openai', baseUrl: 'https://api.openai.com/v1' },
+  { name: 'MiniMax (OpenAI-compatible)', value: 'minimax', baseUrl: 'https://api.minimaxi.com/v1' },
+  { name: 'SiliconFlow (国内可用)', value: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1' },
+  { name: 'Groq (免费额度)', value: 'groq', baseUrl: 'https://api.groq.com/openai/v1' },
 ];
 
-const OPENAI_MODELS = [
-  { name: 'GPT-4o-mini (Recommended)', value: 'gpt-4o-mini' },
-  { name: 'GPT-4o', value: 'gpt-4o' },
-  { name: 'GPT-4-turbo', value: 'gpt-4-turbo' },
-  { name: 'Custom model name...', value: '__custom__' },
-];
+const MODELS_BY_PROVIDER: Record<string, LLMModelOption[]> = {
+  openai: [
+    { name: 'GPT-4o-mini (推荐)', value: 'gpt-4o-mini' },
+    { name: 'GPT-4o', value: 'gpt-4o' },
+    { name: 'GPT-4-turbo', value: 'gpt-4-turbo' },
+  ],
+  minimax: [
+    { name: 'MiniMax-M2.7 (最新)', value: 'MiniMax-M2.7' },
+    { name: 'MiniMax-M2.5', value: 'MiniMax-M2.5' },
+    { name: 'MiniMax-M2.1', value: 'MiniMax-M2.1' },
+    { name: 'MiniMax-M2', value: 'MiniMax-M2' },
+  ],
+  siliconflow: [
+    { name: 'Qwen/Qwen2.5-72B-Instruct', value: 'Qwen/Qwen2.5-72B-Instruct' },
+    { name: 'deepseek-ai/DeepSeek-V2.5', value: 'deepseek-ai/DeepSeek-V2.5' },
+    { name: 'THUDM/glm-4-9b-chat', value: 'THUDM/glm-4-9b-chat' },
+  ],
+  groq: [
+    { name: 'llama-3.1-70b-versatile', value: 'llama-3.1-70b-versatile' },
+    { name: 'mixtral-8x7b-32768', value: 'mixtral-8x7b-32768' },
+    { name: 'llama3-70b-8192', value: 'llama3-70b-8192' },
+  ],
+};
 
 export class InitOrchestrator {
   async execute(): Promise<void> {
@@ -55,73 +82,33 @@ export class InitOrchestrator {
 
     console.log('\n=== Step 2: LLM API Configuration ===\n');
 
-    const { provider } = await inquirer.prompt<{ provider: LLMProvider }>([
+    const { providerValue } = await inquirer.prompt<{ providerValue: string }>([
       {
         type: 'list',
-        name: 'provider',
+        name: 'providerValue',
         message: 'Select LLM provider:',
-        choices: [
-          { name: 'OpenAI (or OpenAI-compatible API)', value: 'openai' },
-          { name: 'MiniMax (OpenAI-compatible)', value: 'minimax' },
-        ],
+        choices: LLM_PROVIDERS.map(p => ({ name: p.name, value: p.value })),
       },
     ]);
 
-    let apiBaseUrl: string;
-    let modelName: string;
+    const provider = LLM_PROVIDERS.find(p => p.value === providerValue)!;
+    const models = MODELS_BY_PROVIDER[providerValue] || [];
 
-    if (provider === 'minimax') {
-      apiBaseUrl = MINIMAX_OPENAI_BASE_URL;
-      const { selectedModel } = await inquirer.prompt<{ selectedModel: string }>([
-        {
-          type: 'list',
-          name: 'selectedModel',
-          message: 'Select MiniMax model:',
-          choices: MINIMAX_MODELS,
-        },
-      ]);
-      modelName = selectedModel;
-    } else {
-      const { selectedModel } = await inquirer.prompt<{ selectedModel: string }>([
-        {
-          type: 'list',
-          name: 'selectedModel',
-          message: 'Select OpenAI model:',
-          choices: OPENAI_MODELS,
-        },
-      ]);
-
-      if (selectedModel === '__custom__') {
-        const { customModel } = await inquirer.prompt<{ customModel: string }>([
-          {
-            type: 'input',
-            name: 'customModel',
-            message: 'Enter custom model name:',
-            validate: (input) => input.length > 0 || 'Model name is required',
-          },
-        ]);
-        modelName = customModel;
-      } else {
-        modelName = selectedModel;
-      }
-
-      const { baseUrlInput } = await inquirer.prompt<{ baseUrlInput: string }>([
-        {
-          type: 'input',
-          name: 'baseUrlInput',
-          message: 'Enter API Base URL (press Enter for default):',
-          default: 'https://api.openai.com/v1',
-        },
-      ]);
-      apiBaseUrl = baseUrlInput || 'https://api.openai.com/v1';
-    }
+    const { modelValue } = await inquirer.prompt<{ modelValue: string }>([
+      {
+        type: 'list',
+        name: 'modelValue',
+        message: 'Select model:',
+        choices: models.map(m => ({ name: m.name, value: m.value })),
+      },
+    ]);
 
     const apiKey = await this.promptAPIKey();
 
-    llmService.initialize(apiKey, apiBaseUrl, provider, modelName);
+    llmService.initialize(apiKey, provider.baseUrl, modelValue);
     const llmValid = await llmService.validateConnection();
     if (!llmValid) {
-      console.log('\n❌ LLM API connection failed. Please check your API key and base URL.\n');
+      console.log('\n❌ LLM API connection failed. Please check your API key.\n');
       const { retry } = await inquirer.prompt<{ retry: boolean }>([
         {
           type: 'confirm',
@@ -201,10 +188,10 @@ export class InitOrchestrator {
         targetRepoPath,
       },
       llm: {
-        provider,
-        apiBaseUrl,
+        provider: providerValue as 'openai' | 'minimax',
+        apiBaseUrl: provider.baseUrl,
         apiKey,
-        modelName,
+        modelName: modelValue,
       },
     };
 
