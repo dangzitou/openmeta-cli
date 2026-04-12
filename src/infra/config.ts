@@ -22,6 +22,7 @@ const DEFAULT_CONFIG: AppConfig = {
     targetRepoPath: '',
   },
   llm: {
+    provider: 'openai',
     apiBaseUrl: 'https://api.openai.com/v1',
     apiKey: '',
     modelName: 'gpt-4o-mini',

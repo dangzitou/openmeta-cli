@@ -1,5 +1,5 @@
 import inquirer from 'inquirer';
-import type { AppConfig, UserProfile, ProficiencyLevel } from '../types/index.js';
+import type { AppConfig, UserProfile, ProficiencyLevel, LLMProvider } from '../types/index.js';
 import { githubService, llmService } from '../services/index.js';
 import { configService, logger } from '../infra/index.js';
 
@@ -37,12 +37,35 @@ export class InitOrchestrator {
 
     console.log('\n=== Step 2: LLM API Configuration ===\n');
 
-    const { apiBaseUrl } = await inquirer.prompt<{ apiBaseUrl: string }>([
+    const { provider } = await inquirer.prompt<{ provider: LLMProvider }>([
+      {
+        type: 'list',
+        name: 'provider',
+        message: 'Select LLM provider:',
+        choices: [
+          { name: 'OpenAI (or OpenAI-compatible API)', value: 'openai' },
+          { name: 'MiniMax', value: 'minimax' },
+        ],
+      },
+    ]);
+
+    let apiBaseUrl: string;
+    let defaultModel: string;
+
+    if (provider === 'minimax') {
+      apiBaseUrl = 'https://api.minimax.chat';
+      defaultModel = 'MiniMax-Text-01';
+    } else {
+      apiBaseUrl = 'https://api.openai.com/v1';
+      defaultModel = 'gpt-4o-mini';
+    }
+
+    const { apiBaseUrl: customBaseUrl } = await inquirer.prompt<{ apiBaseUrl: string }>([
       {
         type: 'input',
         name: 'apiBaseUrl',
         message: 'Enter LLM API Base URL:',
-        default: 'https://api.openai.com/v1',
+        default: apiBaseUrl,
         validate: (input) => input.length > 0 || 'Base URL is required',
       },
     ]);
@@ -61,11 +84,11 @@ export class InitOrchestrator {
         type: 'input',
         name: 'modelName',
         message: 'Enter model name:',
-        default: 'gpt-4o-mini',
+        default: defaultModel,
       },
     ]);
 
-    llmService.initialize(apiKey, apiBaseUrl);
+    llmService.initialize(apiKey, customBaseUrl, provider, modelName);
     const llmValid = await llmService.validateConnection();
     if (!llmValid) {
       throw new Error('LLM API connection failed. Please check your API key and base URL.');
@@ -133,7 +156,8 @@ export class InitOrchestrator {
         targetRepoPath,
       },
       llm: {
-        apiBaseUrl,
+        provider,
+        apiBaseUrl: customBaseUrl,
         apiKey,
         modelName,
       },

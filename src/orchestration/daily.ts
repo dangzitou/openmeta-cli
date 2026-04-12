@@ -18,7 +18,7 @@ export class DailyOrchestrator {
       throw new Error('GitHub credentials validation failed');
     }
 
-    llmService.initialize(config.llm.apiKey, config.llm.apiBaseUrl);
+    llmService.initialize(config.llm.apiKey, config.llm.apiBaseUrl, config.llm.provider, config.llm.modelName);
     const llmValid = await llmService.validateConnection();
     if (!llmValid) {
       throw new Error('LLM API connection failed');
