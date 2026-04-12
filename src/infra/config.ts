@@ -1,8 +1,7 @@
-import { cosmiconfig } from 'cosmiconfig';
 import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
-import type { AppConfig, UserProfile, GitHubConfig, LLMConfig } from '../types/index.js';
+import type { AppConfig } from '../types/index.js';
 import { CryptoService } from './crypto.js';
 import { logger } from './logger.js';
 
@@ -38,11 +37,14 @@ export class ConfigService {
       return this.config;
     }
 
-    const explorer = cosmiconfig(CONFIG_MODULE_NAME);
-    const result = await explorer.search(CONFIG_DIR);
-
-    if (result && result.config) {
-      this.config = this.decryptConfig(result.config as AppConfig);
+    if (existsSync(CONFIG_FILE)) {
+      try {
+        const fileContent = readFileSync(CONFIG_FILE, 'utf-8');
+        this.config = this.decryptConfig(JSON.parse(fileContent) as AppConfig);
+      } catch (error) {
+        logger.warn('Failed to load config, using defaults');
+        this.config = { ...DEFAULT_CONFIG };
+      }
     } else {
       this.config = { ...DEFAULT_CONFIG };
     }

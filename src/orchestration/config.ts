@@ -11,7 +11,6 @@ export class ConfigOrchestrator {
 
     console.log('User Profile:');
     console.log(`  Tech Stack: ${config.userProfile.techStack.join(', ') || '(not set)'}`);
-    console.log(`  Proficiency: ${config.userProfile.proficiency}`);
     console.log(`  Focus Areas: ${config.userProfile.focusAreas.join(', ') || '(not set)'}`);
 
     console.log('\nGitHub:');
