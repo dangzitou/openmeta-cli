@@ -23,7 +23,11 @@ export class LLMService {
     }
 
     try {
-      await this.client.models.list();
+      await this.client.chat.completions.create({
+        model: this.modelName,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 5,
+      });
       logger.success('LLM API connection validated');
       return true;
     } catch (error) {

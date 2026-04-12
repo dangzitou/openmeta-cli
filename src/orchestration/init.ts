@@ -1,5 +1,6 @@
 import inquirer from 'inquirer';
-import type { AppConfig, ProficiencyLevel } from '../types/index.js';
+import select from '@inquirer/select';
+import type { AppConfig } from '../types/index.js';
 import { githubService, llmService } from '../services/index.js';
 import { configService, logger } from '../infra/index.js';
 
@@ -16,24 +17,24 @@ const LLM_PROVIDERS: LLMProviderOption[] = [
     value: 'openai',
     baseUrl: 'https://api.openai.com/v1',
     models: [
-      { name: 'GPT-4o-mini (推荐)', value: 'gpt-4o-mini' },
+      { name: 'GPT-4o-mini', value: 'gpt-4o-mini' },
       { name: 'GPT-4o', value: 'gpt-4o' },
       { name: 'GPT-4-turbo', value: 'gpt-4-turbo' },
     ],
   },
   {
-    name: 'MiniMax (OpenAI兼容)',
+    name: 'MiniMax',
     value: 'minimax',
     baseUrl: 'https://api.minimaxi.com/v1',
     models: [
-      { name: 'MiniMax-M2.7 (最新)', value: 'MiniMax-M2.7' },
+      { name: 'MiniMax-M2.7', value: 'MiniMax-M2.7' },
       { name: 'MiniMax-M2.5', value: 'MiniMax-M2.5' },
       { name: 'MiniMax-M2.1', value: 'MiniMax-M2.1' },
       { name: 'MiniMax-M2', value: 'MiniMax-M2' },
     ],
   },
   {
-    name: 'SiliconFlow (国内可用)',
+    name: 'SiliconFlow',
     value: 'siliconflow',
     baseUrl: 'https://api.siliconflow.cn/v1',
     models: [
@@ -43,7 +44,7 @@ const LLM_PROVIDERS: LLMProviderOption[] = [
     ],
   },
   {
-    name: 'Groq (免费额度)',
+    name: 'Groq',
     value: 'groq',
     baseUrl: 'https://api.groq.com/openai/v1',
     models: [
@@ -92,19 +93,13 @@ export class InitOrchestrator {
     console.log('\n=== Step 2: LLM API Configuration ===\n');
 
     // Step 2a: Select provider
-    const providerChoices = LLM_PROVIDERS.map(p => ({
-      name: p.name,
-      value: p.value,
-    }));
-
-    const { providerValue } = await inquirer.prompt<{ providerValue: string }>([
-      {
-        type: 'list',
-        name: 'providerValue',
-        message: 'Select LLM provider:',
-        choices: providerChoices,
-      },
-    ]);
+    const providerValue = await select({
+      message: 'Select LLM provider:',
+      choices: LLM_PROVIDERS.map(p => ({
+        name: p.name,
+        value: p.value,
+      })),
+    });
 
     // Find the selected provider
     const selectedProvider = LLM_PROVIDERS.find(p => p.value === providerValue);
@@ -115,19 +110,13 @@ export class InitOrchestrator {
     console.log(`Selected provider: ${selectedProvider.name}`);
 
     // Step 2b: Select model
-    const modelChoices = selectedProvider.models.map(m => ({
-      name: m.name,
-      value: m.value,
-    }));
-
-    const { modelValue } = await inquirer.prompt<{ modelValue: string }>([
-      {
-        type: 'list',
-        name: 'modelValue',
-        message: 'Select model:',
-        choices: modelChoices,
-      },
-    ]);
+    const modelValue = await select({
+      message: 'Select model:',
+      choices: selectedProvider.models.map(m => ({
+        name: m.name,
+        value: m.value,
+      })),
+    });
 
     console.log(`Selected model: ${modelValue}`);
 
@@ -158,50 +147,42 @@ export class InitOrchestrator {
 
     console.log('\n=== Step 3: User Profile ===\n');
 
-    const { techStack } = await inquirer.prompt<{ techStack: string }>([
-      {
-        type: 'input',
-        name: 'techStack',
-        message: 'Enter your tech stack (comma-separated, e.g., TypeScript, React, Node.js):',
-        default: '',
-      },
-    ]);
+    const techStack = await select({
+      message: 'Select your tech stack:',
+      choices: [
+        { name: 'TypeScript, React, Node.js', value: 'TypeScript,React,Node.js' },
+        { name: 'Python, Django, FastAPI', value: 'Python,Django,FastAPI' },
+        { name: 'Go, Gin, Echo', value: 'Go,Gin,Echo' },
+        { name: 'Rust, Actix, Tokio', value: 'Rust,Actix,Tokio' },
+        { name: 'Java, Spring Boot', value: 'Java,Spring Boot' },
+        { name: 'C++, CMake', value: 'C++,CMake' },
+        { name: 'Swift, SwiftUI', value: 'Swift,SwiftUI' },
+        { name: 'Kotlin, Jetpack Compose', value: 'Kotlin,Jetpack Compose' },
+      ],
+    });
 
-    const { proficiency } = await inquirer.prompt<{ proficiency: ProficiencyLevel }>([
-      {
-        type: 'list',
-        name: 'proficiency',
-        message: 'Select your proficiency level:',
-        choices: [
-          { name: 'Beginner', value: 'beginner' },
-          { name: 'Intermediate', value: 'intermediate' },
-          { name: 'Advanced', value: 'advanced' },
-        ],
-      },
-    ]);
+    const focusAreas = await select({
+      message: 'Select your focus areas:',
+      choices: [
+        { name: 'Web Development', value: 'web-dev' },
+        { name: 'Backend / API', value: 'backend' },
+        { name: 'DevOps / Infrastructure', value: 'devops' },
+        { name: 'AI / Machine Learning', value: 'ai-ml' },
+        { name: 'Mobile Development', value: 'mobile' },
+        { name: 'Security', value: 'security' },
+        { name: 'Data Engineering', value: 'data' },
+        { name: 'Open Source', value: 'open-source' },
+      ],
+    });
 
-    const { focusAreas } = await inquirer.prompt<{ focusAreas: string }>([
-      {
-        type: 'input',
-        name: 'focusAreas',
-        message: 'Enter your focus areas (comma-separated, e.g., web-dev, devops, ai):',
-        default: '',
-      },
-    ]);
-
-    console.log('\n=== Step 4: Target Repository ===\n');
+    console.log('\n=== Step 4: Target Repository (Optional) ===\n');
 
     const { targetRepoPath } = await inquirer.prompt<{ targetRepoPath: string }>([
       {
         type: 'input',
         name: 'targetRepoPath',
-        message: 'Enter the absolute path to your target private repository for commits:',
-        validate: async (input) => {
-          if (input.length === 0) return 'Path is required';
-          const { existsSync } = await import('fs');
-          if (!existsSync(input)) return 'Path does not exist';
-          return true;
-        },
+        message: 'Enter the absolute path to your target private repository (optional, press Enter to skip):',
+        default: '',
       },
     ]);
 
@@ -209,13 +190,12 @@ export class InitOrchestrator {
       ...config,
       userProfile: {
         techStack: techStack.split(',').map(s => s.trim()).filter(Boolean),
-        proficiency,
         focusAreas: focusAreas.split(',').map(s => s.trim()).filter(Boolean),
       },
       github: {
         pat,
         username,
-        targetRepoPath,
+        targetRepoPath: targetRepoPath || undefined,
       },
       llm: {
         provider: providerValue as 'openai' | 'minimax',
