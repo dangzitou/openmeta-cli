@@ -1,10 +1,14 @@
 import inquirer from 'inquirer';
+import { existsSync } from 'fs';
 import type { AppConfig, MatchedIssue, GeneratedContent } from '../types/index.js';
 import { githubService, llmService, contentService, gitService } from '../services/index.js';
 import { logger, configService } from '../infra/index.js';
 import type { ContentType } from '../types/content.types.js';
+import { Octokit } from '@octokit/rest';
 
 export class DailyOrchestrator {
+  private octokit: Octokit | null = null;
+
   async execute(): Promise<void> {
     logger.info('Starting daily open source workflow...');
 
@@ -18,11 +22,15 @@ export class DailyOrchestrator {
       throw new Error('GitHub credentials validation failed');
     }
 
+    this.octokit = new Octokit({ auth: config.github.pat });
+
     llmService.initialize(config.llm.apiKey, config.llm.apiBaseUrl, config.llm.modelName);
     const llmValid = await llmService.validateConnection();
     if (!llmValid) {
       throw new Error('LLM API connection failed');
     }
+
+    const targetRepoPath = await this.ensureTargetRepo(config);
 
     logger.info('Fetching and filtering issues...');
     const issues = await githubService.fetchTrendingIssues();
@@ -116,7 +124,7 @@ export class DailyOrchestrator {
     ]);
 
     if (confirmCommit) {
-      const gitInitialized = await gitService.initialize(config.github.targetRepoPath);
+      const gitInitialized = await gitService.initialize(targetRepoPath);
       if (!gitInitialized) {
         throw new Error('Failed to initialize git repository');
       }
@@ -154,9 +162,39 @@ export class DailyOrchestrator {
     if (!config.llm.apiKey) {
       throw new Error('LLM API configuration is incomplete. Please run "openmeta init" first.');
     }
-    if (!config.github.targetRepoPath) {
-      throw new Error('Target repository path is not configured. Please run "openmeta init" first.');
+  }
+
+  private async ensureTargetRepo(config: AppConfig): Promise<string> {
+    if (config.github.targetRepoPath && existsSync(config.github.targetRepoPath)) {
+      return config.github.targetRepoPath;
     }
+
+    // Create a new private repo if not configured
+    const repoName = 'openmeta-daily';
+    const { mkdirSync, homedir } = await import('fs');
+    const repoPath = `${homedir()}/.openmeta/${repoName}`;
+
+    if (!existsSync(repoPath)) {
+      mkdirSync(repoPath, { recursive: true });
+    }
+
+    // Initialize git and create remote repo
+    const { simpleGit } = await import('simple-git');
+    const git = simpleGit(repoPath);
+    await git.init();
+
+    // Create repo on GitHub
+    const { data } = await this.octokit!.rest.repos.createForAuthenticatedUser({
+      name: repoName,
+      private: true,
+      auto_init: true,
+      description: 'Daily open source contribution tracking',
+    });
+
+    await git.addRemote('origin', data.clone_url);
+    logger.success(`Created repository: ${data.clone_url}`);
+
+    return repoPath;
   }
 }
 
