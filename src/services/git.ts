@@ -1,14 +1,19 @@
 import { simpleGit, type SimpleGit } from 'simple-git';
-import { existsSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { dirname, join } from 'path';
 import { getDailyNoteFileName } from '../infra/date.js';
 import { logger } from '../infra/logger.js';
 
 export interface GitPublishResult {
   branch: string;
-  fileName: string;
-  filePath: string;
+  fileNames: string[];
+  filePaths: string[];
   pushed: boolean;
+}
+
+export interface FileWriteRequest {
+  path: string;
+  content: string;
 }
 
 export class GitService {
@@ -45,22 +50,36 @@ export class GitService {
 
     try {
       const fileName = getDailyNoteFileName();
-      const filePath = join(this.repoPath, fileName);
-      writeFileSync(filePath, content, 'utf-8');
+      return this.writeAndPublish([{ path: fileName, content }], commitMessage);
+    } catch (error) {
+      logger.debug('Git operation failed', error);
+      logger.warn('Unable to write, commit, or push the generated note.');
+      return null;
+    }
+  }
 
-      logger.info(`File created: ${fileName}`);
+  async writeAndPublish(files: FileWriteRequest[], commitMessage: string): Promise<GitPublishResult | null> {
+    if (!this.git) {
+      throw new Error('Git service not initialized');
+    }
 
+    try {
       const branch = await this.ensureActiveBranch();
 
-      await this.git.add(fileName);
-      logger.debug('Files staged');
+      for (const file of files) {
+        const filePath = join(this.repoPath, file.path);
+        mkdirSync(dirname(filePath), { recursive: true });
+        writeFileSync(filePath, file.content, 'utf-8');
+        await this.git.add(file.path);
+      }
 
+      logger.debug('Files staged');
       await this.git.commit(commitMessage);
       logger.debug(`Commit created: ${commitMessage}`);
 
       const remotes = await this.git.getRemotes();
       const pushed = remotes.length > 0;
-      if (remotes.length > 0) {
+      if (pushed) {
         await this.git.raw(['push', '--set-upstream', 'origin', branch]);
         logger.success('Changes pushed to remote');
       } else {
@@ -69,13 +88,13 @@ export class GitService {
 
       return {
         branch,
-        fileName,
-        filePath,
+        fileNames: files.map((file) => file.path),
+        filePaths: files.map((file) => join(this.repoPath, file.path)),
         pushed,
       };
     } catch (error) {
       logger.debug('Git operation failed', error);
-      logger.warn('Unable to write, commit, or push the generated note.');
+      logger.warn('Unable to write, commit, or push generated files.');
       return null;
     }
   }

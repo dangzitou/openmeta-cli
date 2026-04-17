@@ -1,7 +1,14 @@
 import OpenAI from 'openai';
-import type { GitHubIssue, MatchedIssue, UserProfile } from '../types/index.js';
+import type { GitHubIssue, MatchedIssue, RankedIssue, RepoMemory, RepoWorkspaceContext, UserProfile } from '../types/index.js';
 import { logger } from '../infra/logger.js';
-import { fillPrompt, ISSUE_MATCH_PROMPT, DAILY_REPORT_GENERATE_PROMPT, DAILY_DIARY_GENERATE_PROMPT } from '../infra/prompt-templates.js';
+import {
+  fillPrompt,
+  ISSUE_MATCH_PROMPT,
+  DAILY_REPORT_GENERATE_PROMPT,
+  DAILY_DIARY_GENERATE_PROMPT,
+  PATCH_DRAFT_PROMPT,
+  PR_DRAFT_PROMPT,
+} from '../infra/prompt-templates.js';
 
 export class LLMService {
   private client: OpenAI | null = null;
@@ -73,6 +80,52 @@ Repo Stars: ${i.repoStars}`
     const prompt = fillPrompt(DAILY_DIARY_GENERATE_PROMPT, {
       issueAnalysis,
       userCodeSnippets: userCodeSnippets || 'No code snippets provided.',
+    });
+
+    return await this.chat(prompt);
+  }
+
+  async generatePatchDraft(issue: RankedIssue, workspace: RepoWorkspaceContext, memory: RepoMemory): Promise<string> {
+    const repoContext = [
+      `Workspace Path: ${workspace.workspacePath}`,
+      `Default Branch: ${workspace.defaultBranch}`,
+      `Workspace Dirty: ${workspace.workspaceDirty}`,
+      `Candidate Files: ${workspace.candidateFiles.join(', ') || 'none'}`,
+      `Detected Test Commands: ${workspace.testCommands.map((item) => item.command).join(', ') || 'none'}`,
+      'Snippets:',
+      ...workspace.snippets.map((snippet) => `FILE: ${snippet.path}\n${snippet.content}`),
+    ].join('\n\n');
+
+    const repoMemory = [
+      `Last Selected Issue: ${memory.lastSelectedIssue || 'n/a'}`,
+      `Generated Dossiers: ${memory.generatedDossiers}`,
+      `Preferred Paths: ${memory.preferredPaths.join(', ') || 'none'}`,
+      `Known Test Commands: ${memory.detectedTestCommands.join(', ') || 'none'}`,
+    ].join('\n');
+
+    const prompt = fillPrompt(PATCH_DRAFT_PROMPT, {
+      issueContext: this.formatRankedIssue(issue),
+      repoContext,
+      repoMemory,
+    });
+
+    return await this.chat(prompt);
+  }
+
+  async generatePrDraft(
+    issue: RankedIssue,
+    patchDraft: string,
+    workspace: RepoWorkspaceContext,
+  ): Promise<string> {
+    const validationContext = [
+      `Detected Commands: ${workspace.testCommands.map((item) => item.command).join(', ') || 'none'}`,
+      `Baseline Results: ${workspace.testResults.length > 0 ? workspace.testResults.map((result) => `${result.command} => ${result.passed ? 'passed' : `failed (${result.exitCode ?? 'n/a'})`}`).join('; ') : 'not executed'}`,
+    ].join('\n');
+
+    const prompt = fillPrompt(PR_DRAFT_PROMPT, {
+      issueContext: this.formatRankedIssue(issue),
+      patchDraft,
+      validationContext,
     });
 
     return await this.chat(prompt);
@@ -150,6 +203,21 @@ Repo Stars: ${i.repoStars}`
 
   private getIssueReference(issue: GitHubIssue): string {
     return `${issue.repoFullName}#${issue.number}`;
+  }
+
+  private formatRankedIssue(issue: RankedIssue): string {
+    return [
+      `Issue: ${issue.repoFullName}#${issue.number}`,
+      `Title: ${issue.title}`,
+      `Body: ${issue.body}`,
+      `Core Demand: ${issue.analysis.coreDemand}`,
+      `Tech Requirements: ${issue.analysis.techRequirements.join(', ')}`,
+      `Estimated Workload: ${issue.analysis.estimatedWorkload}`,
+      `Technical Match Score: ${issue.matchScore}`,
+      `Opportunity Score: ${issue.opportunity.score}`,
+      `Overall Score: ${issue.opportunity.overallScore}`,
+      `Opportunity Summary: ${issue.opportunity.summary}`,
+    ].join('\n');
   }
 
   private escapeRegExp(value: string): string {

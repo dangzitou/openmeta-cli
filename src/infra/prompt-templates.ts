@@ -42,6 +42,49 @@ Requirements:
 Issue analysis report: {{issueAnalysis}}
 User-supplied code snippets: {{userCodeSnippets}}`;
 
+export const PATCH_DRAFT_PROMPT = `You are OpenMeta, an autonomous open source contribution agent.
+
+Generate a precise patch draft in Markdown for the selected issue.
+
+Requirements:
+1. Output sections in this exact order: Goal, Target Files, Proposed Changes, Risks, Validation Notes;
+2. In Target Files, list 3-6 likely files with why they matter;
+3. In Proposed Changes, describe file-level edits concretely enough that an engineer could implement them;
+4. Keep the plan minimal and high-confidence. If context is insufficient, say so explicitly;
+5. No marketing language, no extra headers outside the required sections.
+
+Issue:
+{{issueContext}}
+
+Repo Context:
+{{repoContext}}
+
+Repo Memory:
+{{repoMemory}}
+`;
+
+export const PR_DRAFT_PROMPT = `You are OpenMeta, an autonomous open source contribution agent.
+
+Write a pull request draft in Markdown for the selected issue.
+
+Requirements:
+1. Output sections in this exact order: Title, Summary, Changes, Validation, Risks;
+2. Title must be a single concise line suitable for a GitHub PR title;
+3. Summary must explain the user problem and the intended fix;
+4. Changes must be a flat bullet list;
+5. Validation must mention the provided test commands and whether they passed or are still pending;
+6. Risks must be honest and concrete.
+
+Issue:
+{{issueContext}}
+
+Patch Draft:
+{{patchDraft}}
+
+Validation Context:
+{{validationContext}}
+`;
+
 export function fillPrompt(template: string, data: Record<string, string>): string {
   let result = template;
   for (const [key, value] of Object.entries(data)) {

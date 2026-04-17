@@ -1,6 +1,14 @@
-import type { ContentType, GeneratedContent, MatchedIssue } from '../types/index.js';
+import type {
+  ContentType,
+  ContributionInboxItem,
+  GeneratedContent,
+  ProofOfWorkRecord,
+  RankedIssue,
+  RepoMemory,
+  RepoWorkspaceContext,
+  MatchedIssue,
+} from '../types/index.js';
 import { getLocalDateStamp } from '../infra/date.js';
-import { logger } from '../infra/logger.js';
 
 export class ContentService {
   generateResearchNote(issues: MatchedIssue[], reportContent: string): GeneratedContent {
@@ -59,6 +67,95 @@ export class ContentService {
 
   getContentTypeLabel(type: ContentType): string {
     return type === 'research_note' ? 'Research Notes' : 'Development Diary';
+  }
+
+  formatContributionDossier(
+    issue: RankedIssue,
+    workspace: RepoWorkspaceContext,
+    memory: RepoMemory,
+    patchDraft: string,
+    prDraft: string,
+  ): string {
+    const lines = [
+      `# OpenMeta Contribution Dossier - ${issue.repoFullName}#${issue.number}`,
+      '',
+      '## Opportunity Snapshot',
+      '',
+      `- Overall Score: ${issue.opportunity.overallScore}/100`,
+      `- Technical Match: ${issue.matchScore}/100`,
+      `- Opportunity Score: ${issue.opportunity.score}/100`,
+      `- Summary: ${issue.opportunity.summary}`,
+      '',
+      '## Breakdown',
+      '',
+      `- Technical Fit: ${issue.opportunity.breakdown.technicalFit}`,
+      `- Freshness: ${issue.opportunity.breakdown.freshness}`,
+      `- Onboarding Clarity: ${issue.opportunity.breakdown.onboardingClarity}`,
+      `- Merge Potential: ${issue.opportunity.breakdown.mergePotential}`,
+      `- Impact: ${issue.opportunity.breakdown.impact}`,
+      '',
+      '## Workspace',
+      '',
+      `- Workspace Path: ${workspace.workspacePath}`,
+      `- Default Branch: ${workspace.defaultBranch}`,
+      `- Agent Branch: ${workspace.branchName || 'not created'}`,
+      `- Workspace Dirty: ${workspace.workspaceDirty}`,
+      '',
+      '## Detected Test Commands',
+      '',
+      ...(workspace.testCommands.length > 0 ? workspace.testCommands.map((item) => `- \`${item.command}\` | ${item.reason}`) : ['- None detected']),
+      '',
+      '## Baseline Test Results',
+      '',
+      ...(workspace.testResults.length > 0
+        ? workspace.testResults.map((result) => `- \`${result.command}\` | ${result.passed ? 'passed' : `failed (${result.exitCode ?? 'n/a'})`}`)
+        : ['- Not executed']),
+      '',
+      '## Repo Memory',
+      '',
+      `- Generated Dossiers: ${memory.generatedDossiers}`,
+      `- Last Selected Issue: ${memory.lastSelectedIssue || 'n/a'}`,
+      `- Preferred Paths: ${memory.preferredPaths.join(', ') || 'none'}`,
+      '',
+      '## Patch Draft',
+      '',
+      patchDraft,
+      '',
+      '## PR Draft',
+      '',
+      prDraft,
+      '',
+      `_Generated at ${new Date().toISOString()}_`,
+      '',
+    ];
+
+    return lines.join('\n');
+  }
+
+  formatInboxMarkdown(items: ContributionInboxItem[]): string {
+    const lines = [
+      '# Contribution Inbox',
+      '',
+      ...(items.length > 0
+        ? items.map((item) => `- [${item.status.toUpperCase()}] ${item.repoFullName}#${item.issueNumber} | overall ${item.overallScore} | ${item.summary}`)
+        : ['- Inbox is empty']),
+      '',
+    ];
+
+    return lines.join('\n');
+  }
+
+  formatProofOfWorkMarkdown(records: ProofOfWorkRecord[]): string {
+    const lines = [
+      '# Proof of Work',
+      '',
+      ...(records.length > 0
+        ? records.slice(0, 20).map((record) => `- ${record.repoFullName}#${record.issueNumber} | overall ${record.overallScore} | published=${record.published}`)
+        : ['- No activity recorded']),
+      '',
+    ];
+
+    return lines.join('\n');
   }
 }
 
