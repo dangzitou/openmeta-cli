@@ -1,6 +1,9 @@
 import { Octokit } from '@octokit/rest';
 import type { RestEndpointMethodTypes } from '@octokit/plugin-rest-endpoint-methods';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import type { GitHubIssue } from '../types/index.js';
+import { ensureDirectory, getOpenMetaStateDir } from '../infra/index.js';
 import { logger } from '../infra/logger.js';
 
 const FILTER_LABEL_GROUPS = [
@@ -8,6 +11,7 @@ const FILTER_LABEL_GROUPS = [
   ['help wanted', 'help-wanted'],
 ] as const;
 const SEARCH_RESULTS_PER_GROUP = 30;
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
 
 type SearchIssueItem =
   RestEndpointMethodTypes['search']['issuesAndPullRequests']['response']['data']['items'][number];
@@ -27,6 +31,11 @@ interface SearchFailure {
   labelGroup: readonly string[];
   reason: string;
   rateLimited: boolean;
+}
+
+interface IssueCachePayload {
+  fetchedAt: string;
+  issues: GitHubIssue[];
 }
 
 export class GitHubService {
@@ -57,6 +66,12 @@ export class GitHubService {
   async fetchTrendingIssues(): Promise<GitHubIssue[]> {
     if (!this.octokit) {
       throw new Error('GitHub service not initialized');
+    }
+
+    const cachedIssues = this.loadCachedIssues();
+    if (cachedIssues) {
+      logger.info(`Using cached GitHub issues (${cachedIssues.length}) to avoid unnecessary Search API calls.`);
+      return cachedIssues;
     }
 
     const issues: GitHubIssue[] = [];
@@ -130,6 +145,7 @@ export class GitHubService {
       }
 
       logger.success(`Fetched ${issues.length} trending issues from ${FILTER_LABEL_GROUPS.length} label searches`);
+      this.saveCachedIssues(issues);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith('GitHub issue discovery')) {
         throw error;
@@ -279,6 +295,47 @@ export class GitHubService {
     }
 
     return `GitHub issue discovery failed for all label groups: ${failures.map((failure) => failure.labelGroup.join('/')).join(', ')}.`;
+  }
+
+  private getCachePath(): string {
+    return join(ensureDirectory(join(getOpenMetaStateDir(), 'cache')), 'github-issues.json');
+  }
+
+  private loadCachedIssues(): GitHubIssue[] | null {
+    const cachePath = this.getCachePath();
+    if (!existsSync(cachePath)) {
+      return null;
+    }
+
+    try {
+      const payload = JSON.parse(readFileSync(cachePath, 'utf-8')) as Partial<IssueCachePayload>;
+      if (!payload.fetchedAt || !Array.isArray(payload.issues)) {
+        return null;
+      }
+
+      const ageMs = Date.now() - new Date(payload.fetchedAt).getTime();
+      if (ageMs > SEARCH_CACHE_TTL_MS) {
+        return null;
+      }
+
+      return payload.issues as GitHubIssue[];
+    } catch (error) {
+      logger.debug('Unable to read GitHub issue cache', error);
+      return null;
+    }
+  }
+
+  private saveCachedIssues(issues: GitHubIssue[]): void {
+    try {
+      const payload: IssueCachePayload = {
+        fetchedAt: new Date().toISOString(),
+        issues,
+      };
+
+      writeFileSync(this.getCachePath(), JSON.stringify(payload, null, 2), 'utf-8');
+    } catch (error) {
+      logger.debug('Unable to save GitHub issue cache', error);
+    }
   }
 }
 

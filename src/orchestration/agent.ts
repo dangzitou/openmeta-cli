@@ -10,8 +10,10 @@ import {
   ensureDirectory,
   getLocalDateStamp,
   getOpenMetaArtifactRoot,
+  isUserCancelledError,
   logger,
   prompt,
+  selectPrompt,
   ui,
 } from '../infra/index.js';
 import {
@@ -283,24 +285,54 @@ export class AgentOrchestrator {
       console.log(`     ${chalk.gray('Summary:')} ${chalk.gray(issue.opportunity.summary)}`);
     }
 
-    const { issueId } = await prompt<{ issueId: string }>([
-      {
-        type: 'list',
-        name: 'issueId',
+    try {
+      return await selectPrompt<RankedIssue>({
         message: 'Select an opportunity to draft:',
+        pageSize: Math.min(10, topIssues.length),
         choices: topIssues.map((issue) => ({
-          name: `${issue.repoFullName}#${issue.number} | overall ${issue.opportunity.overallScore} | ${issue.title.slice(0, 50)}`,
-          value: issue.id.toString(),
+          name: `${issue.repoFullName}#${issue.number} | overall ${issue.opportunity.overallScore}`,
+          description: issue.title.slice(0, 72),
+          value: issue,
         })),
-      },
-    ]);
+      });
+    } catch (error) {
+      if (isUserCancelledError(error)) {
+        throw error;
+      }
 
-    const selectedIssue = issues.find((issue) => issue.id.toString() === issueId);
-    if (!selectedIssue) {
-      throw new Error('Selected issue not found.');
+      logger.warn('Interactive select UI is unavailable. Falling back to numeric input.');
     }
 
-    return selectedIssue;
+    while (true) {
+      const { selectedIndex } = await prompt<{ selectedIndex: string }>([
+        {
+          type: 'input',
+          name: 'selectedIndex',
+          message: `Type the opportunity number to draft (1-${topIssues.length}):`,
+          validate: (input: string) => {
+            const parsed = Number.parseInt(input.trim(), 10);
+            if (Number.isNaN(parsed) || parsed < 1 || parsed > topIssues.length) {
+              return `Enter a number between 1 and ${topIssues.length}.`;
+            }
+
+            return true;
+          },
+        },
+      ]);
+
+      const index = Number.parseInt(selectedIndex.trim(), 10) - 1;
+      const selectedIssue = topIssues[index];
+      if (selectedIssue) {
+        return selectedIssue;
+      }
+
+      ui.banner({
+        label: 'OpenMeta Agent',
+        title: 'Invalid selection',
+        subtitle: `OpenMeta could not match "${selectedIndex}" to one of the displayed opportunities. Try again.`,
+        tone: 'warning',
+      });
+    }
   }
 
   private prepareLocalArtifactPaths(issue: RankedIssue) {
