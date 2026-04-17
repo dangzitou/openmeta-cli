@@ -1,9 +1,10 @@
 import type { ContentType, GeneratedContent, MatchedIssue } from '../types/index.js';
+import { getLocalDateStamp } from '../infra/date.js';
 import { logger } from '../infra/logger.js';
 
 export class ContentService {
   generateResearchNote(issues: MatchedIssue[], reportContent: string): GeneratedContent {
-    const title = `Daily Open Source Issue Research Notes - ${new Date().toISOString().split('T')[0]}`;
+    const title = `Daily Open Source Issue Research Notes - ${getLocalDateStamp()}`;
 
     return {
       type: 'research_note',
@@ -15,7 +16,7 @@ export class ContentService {
   }
 
   generateDiary(issues: MatchedIssue[], diaryContent: string): GeneratedContent {
-    const title = `Daily Development Diary - ${new Date().toISOString().split('T')[0]}`;
+    const title = `Daily Development Diary - ${getLocalDateStamp()}`;
 
     return {
       type: 'development_diary',
@@ -50,7 +51,7 @@ export class ContentService {
 
   formatCommitMessage(content: GeneratedContent, template: string): string {
     const typeLabel = content.type === 'research_note' ? 'Research Notes' : 'Development Diary';
-    const date = new Date().toISOString().split('T')[0];
+    const date = getLocalDateStamp();
     return template
       .replace('{{title}}', `${typeLabel} - ${date}`)
       .replace('{{content}}', `Daily open source contribution log for ${date}`);

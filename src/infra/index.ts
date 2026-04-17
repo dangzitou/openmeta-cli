@@ -1,6 +1,7 @@
 export { logger, Logger } from './logger.js';
 export { CryptoService } from './crypto.js';
 export { configService, ConfigService } from './config.js';
+export { getLocalDateStamp, getDailyNoteFileName } from './date.js';
 export { UserCancelledError, isPromptAbortError, isUserCancelledError, getErrorMessage } from './errors.js';
 export { prompt } from './prompts.js';
 export { selectPrompt } from './select.js';

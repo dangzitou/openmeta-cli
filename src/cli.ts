@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from 'commander';
-import { registerInitCommand, registerDailyCommand, registerConfigCommand } from './commands/index.js';
+import { registerInitCommand, registerDailyCommand, registerConfigCommand, registerAutomationCommand } from './commands/index.js';
 import { getErrorMessage, ui } from './infra/index.js';
 
 const VERSION = '1.0.0';
@@ -19,6 +19,7 @@ async function main(): Promise<void> {
   registerInitCommand(program);
   registerDailyCommand(program);
   registerConfigCommand(program);
+  registerAutomationCommand(program);
 
   program.on('command:*', () => {
     ui.commandFailed('openmeta', `Unknown command "${program.args.join(' ')}". Run "openmeta --help" to see available commands.`);

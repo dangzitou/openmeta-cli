@@ -2,8 +2,9 @@ import chalk from 'chalk';
 import { existsSync } from 'fs';
 import type { AppConfig } from '../types/index.js';
 import type { UserProficiency } from '../types/config.types.js';
-import { githubService, llmService } from '../services/index.js';
+import { githubService, llmService, schedulerService, type SchedulerSyncResult } from '../services/index.js';
 import { configService, prompt, selectPrompt, ui } from '../infra/index.js';
+import type { ContentType } from '../types/content.types.js';
 
 interface LLMProviderOption {
   name: string;
@@ -250,6 +251,60 @@ export class InitOrchestrator {
       },
     ]);
 
+    ui.section('Step 5 · Daily automation', 'OpenMeta can install a system scheduler so one init keeps your daily workflow running unattended.');
+
+    const { automationEnabled } = await prompt<{ automationEnabled: boolean }>([
+      {
+        type: 'confirm',
+        name: 'automationEnabled',
+        message: 'Enable unattended daily automation?',
+        default: config.automation.enabled,
+      },
+    ]);
+
+    let scheduleTime = config.automation.scheduleTime;
+    let contentType = config.automation.contentType;
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || config.automation.timezone;
+    const scheduler = schedulerService.detectProvider();
+
+    if (automationEnabled) {
+      const scheduleResponse = await prompt<{ scheduleTime: string }>([
+        {
+          type: 'input',
+          name: 'scheduleTime',
+          message: 'Run every day at what local time? (HH:mm)',
+          default: config.automation.scheduleTime,
+          filter: (input: string) => input.trim(),
+          validate: (input: string) => /^([01]\d|2[0-3]):([0-5]\d)$/.test(input) || 'Enter time as HH:mm.',
+        },
+      ]);
+      scheduleTime = scheduleResponse.scheduleTime;
+
+      contentType = await selectPrompt<ContentType>({
+        message: 'Default content type for unattended runs:',
+        default: config.automation.contentType,
+        choices: [
+          { name: 'Research Notes', value: 'research_note', description: 'Safer default for unattended runs.' },
+          { name: 'Development Diary', value: 'development_diary', description: 'Generates diary-style summaries without code snippets.' },
+        ],
+      });
+
+      const confirmed = await this.confirmPersistentAutomation(scheduleTime, timezone);
+      if (!confirmed) {
+        ui.banner({
+          label: 'OpenMeta Init',
+          title: 'Automation not enabled',
+          subtitle: 'Persistent unattended execution was cancelled before any scheduler changes were made.',
+          lines: [
+            'You can still run "openmeta daily" manually.',
+            'Enable later with "openmeta init" or "openmeta automation enable".',
+          ],
+          tone: 'warning',
+        });
+        return;
+      }
+    }
+
     const newConfig: AppConfig = {
       ...config,
       userProfile: {
@@ -268,22 +323,34 @@ export class InitOrchestrator {
         apiKey,
         modelName: modelValue,
       },
+      automation: {
+        ...config.automation,
+        enabled: automationEnabled,
+        scheduleTime,
+        timezone,
+        contentType,
+        scheduler,
+      },
     };
 
     await configService.save(newConfig);
 
+    const schedulerResult = await schedulerService.sync(newConfig);
+    const nextStepMessage = this.getNextStepMessage(newConfig, schedulerResult);
+
     ui.banner({
       label: 'OpenMeta Init',
       title: 'Setup complete',
-      subtitle: 'Your local workspace is ready for daily issue discovery and note generation.',
+      subtitle: 'Your local workspace is ready for daily issue discovery and unattended note generation.',
       lines: [
         `GitHub account: ${username}`,
         `Model: ${selectedProvider!.name} / ${modelValue}`,
         `Target repo: ${targetRepoPath || 'Auto-managed private repository'}`,
+        this.formatAutomationSummary(newConfig, schedulerResult),
         `Config saved at: ${configService.getConfigPath()}`,
-        'Next step: run "openmeta daily".',
+        nextStepMessage,
       ],
-      tone: 'success',
+      tone: schedulerResult.status === 'failed' ? 'warning' : 'success',
     });
   }
 
@@ -324,6 +391,76 @@ export class InitOrchestrator {
       },
     ]);
     return username.trim();
+  }
+
+  private formatAutomationSummary(config: AppConfig, result: SchedulerSyncResult): string {
+    if (!config.automation.enabled) {
+      return 'Automation: disabled.';
+    }
+
+    if (result.status === 'installed') {
+      return `Automation: ${config.automation.scheduler} installed for ${config.automation.scheduleTime} (${config.automation.timezone}).`;
+    }
+
+    if (result.status === 'manual') {
+      return `Automation: scheduler unsupported on this platform. Manual command: ${result.command}`;
+    }
+
+    return `Automation: configuration saved, but scheduler setup needs attention (${result.detail}).`;
+  }
+
+  private async confirmPersistentAutomation(scheduleTime: string, timezone: string): Promise<boolean> {
+    ui.banner({
+      label: 'OpenMeta Init',
+      title: 'Persistent automation warning',
+      subtitle: 'When enabled, OpenMeta installs a system-level scheduled task that runs every day until you turn it off.',
+      lines: [
+        `Current target time: ${scheduleTime} (${timezone})`,
+        'Scheduled runs use headless mode and can commit and push without interactive review.',
+        'Disable command: openmeta automation disable',
+      ],
+      tone: 'warning',
+    });
+
+    const { acknowledgePersistence } = await prompt<{ acknowledgePersistence: boolean }>([
+      {
+        type: 'confirm',
+        name: 'acknowledgePersistence',
+        message: 'Do you understand that this creates a long-running scheduled task on your machine?',
+        default: false,
+      },
+    ]);
+
+    if (!acknowledgePersistence) {
+      return false;
+    }
+
+    const { finalConsent } = await prompt<{ finalConsent: boolean }>([
+      {
+        type: 'confirm',
+        name: 'finalConsent',
+        message: 'Enable persistent daily automation now?',
+        default: false,
+      },
+    ]);
+
+    return finalConsent;
+  }
+
+  private getNextStepMessage(config: AppConfig, result: SchedulerSyncResult): string {
+    if (!config.automation.enabled) {
+      return 'Next step: run "openmeta daily".';
+    }
+
+    if (result.status === 'installed') {
+      return 'OpenMeta will keep running daily in headless mode.';
+    }
+
+    if (result.status === 'manual') {
+      return 'Add the manual command above to your system scheduler.';
+    }
+
+    return 'Fix the scheduler issue above, then rerun "openmeta init".';
   }
 }
 

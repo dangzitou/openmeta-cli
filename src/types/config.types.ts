@@ -1,4 +1,7 @@
+import type { ContentType } from './content.types.js';
+
 export type UserProficiency = 'beginner' | 'intermediate' | 'advanced';
+export type SchedulerProvider = 'launchd' | 'cron' | 'manual';
 
 export interface UserProfile {
   techStack: string[];
@@ -21,9 +24,20 @@ export interface LLMConfig {
   modelName: string;
 }
 
+export interface AutomationConfig {
+  enabled: boolean;
+  scheduleTime: string;
+  timezone: string;
+  contentType: ContentType;
+  scheduler: SchedulerProvider;
+  minMatchScore: number;
+  skipIfAlreadyGeneratedToday: boolean;
+}
+
 export interface AppConfig {
   userProfile: UserProfile;
   github: GitHubConfig;
   llm: LLMConfig;
+  automation: AutomationConfig;
   commitTemplate: string;
 }

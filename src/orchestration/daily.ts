@@ -4,28 +4,46 @@ import { homedir } from 'os';
 import { join } from 'path';
 import type { AppConfig, MatchedIssue, GeneratedContent } from '../types/index.js';
 import { githubService, llmService, contentService, gitService } from '../services/index.js';
-import { logger, configService, prompt, ui } from '../infra/index.js';
+import { getDailyNoteFileName, logger, configService, prompt, ui } from '../infra/index.js';
 import type { ContentType } from '../types/content.types.js';
 import { Octokit } from '@octokit/rest';
 import { simpleGit, type SimpleGit } from 'simple-git';
 
+export interface DailyExecutionOptions {
+  headless?: boolean;
+  force?: boolean;
+  contentType?: ContentType;
+  schedulerRun?: boolean;
+}
+
 export class DailyOrchestrator {
   private octokit: Octokit | null = null;
 
-  async execute(): Promise<void> {
+  async execute(options: DailyExecutionOptions = {}): Promise<void> {
+    const config = await configService.get();
+    const headless = Boolean(options.headless);
+    const schedulerRun = Boolean(options.schedulerRun);
+    const defaultContentType = options.contentType || (headless ? config.automation.contentType : undefined);
+
     ui.banner({
       label: 'OpenMeta Daily',
-      title: 'Start a focused contribution session',
-      subtitle: 'We will validate your setup, rank onboarding issues, and draft a note you can optionally commit.',
+      title: headless ? 'Run unattended contribution workflow' : 'Start a focused contribution session',
+      subtitle: headless
+        ? 'OpenMeta will use your saved automation defaults, pick the best issue, and commit the result automatically.'
+        : 'We will validate your setup, rank onboarding issues, and draft a note you can optionally commit.',
       lines: [
-        'Press Ctrl+C at any prompt to close the session cleanly.',
+        headless
+          ? 'No prompts will be shown in this mode.'
+          : 'Press Ctrl+C at any prompt to close the session cleanly.',
       ],
     });
 
-    const config = await configService.get();
-
     ui.section('Workspace check', 'Verifying credentials, model access, and your target repository.');
     await this.validateConfig(config);
+
+    if (headless && !schedulerRun) {
+      await this.confirmManualHeadlessRun(config);
+    }
 
     githubService.initialize(config.github.pat, config.github.username);
     const ghValid = await githubService.validateCredentials();
@@ -42,6 +60,16 @@ export class DailyOrchestrator {
     }
 
     const targetRepoPath = await this.ensureTargetRepo(config);
+    const todayFilePath = join(targetRepoPath, getDailyNoteFileName());
+
+    if (headless && config.automation.skipIfAlreadyGeneratedToday && !options.force && existsSync(todayFilePath)) {
+      ui.emptyState(
+        'OpenMeta Daily',
+        'Today already has a generated note',
+        `OpenMeta skipped this run because ${todayFilePath} already exists. Use "openmeta daily --headless --force" to generate again.`,
+      );
+      return;
+    }
 
     ui.section('Find candidate issues', 'Searching GitHub for active onboarding issues that match your profile.');
     const issues = await githubService.fetchTrendingIssues();
@@ -67,65 +95,73 @@ export class DailyOrchestrator {
 
     const displayIssues = issuesWithScores.slice(0, 10);
 
-    ui.section('Review matched issues', `Showing the top ${displayIssues.length} matches from ${issuesWithScores.length} scored candidates.`);
-    console.log(chalk.bold(`\n  Found ${issuesWithScores.length} matching issues\n`));
-    console.log(chalk.gray('─'.repeat(60)));
+    let selectedIssue: MatchedIssue;
 
-    for (const [index, issue] of displayIssues.entries()) {
-      const scoreColor = issue.matchScore >= 80 ? chalk.green : issue.matchScore >= 70 ? chalk.cyan : chalk.yellow;
-
-      console.log(`\n  ${chalk.bold(`${index + 1}.`)} ${chalk.white(issue.repoFullName)}${chalk.gray('#')}${chalk.white(issue.number)}`);
-      console.log(`     ${chalk.gray('Title:')} ${chalk.white(issue.title)}`);
-
-      if (issue.repoDescription) {
-        console.log(`     ${chalk.gray('About:')} ${chalk.gray(issue.repoDescription.slice(0, 60))}...`);
+    if (headless) {
+      const automationIssue = this.selectIssueForAutomation(issuesWithScores, config.automation.minMatchScore);
+      if (!automationIssue) {
+        ui.emptyState(
+          'OpenMeta Daily',
+          'No issue met the automation threshold',
+          `Top matches were below ${config.automation.minMatchScore}/100. Lower "automation.minMatchScore" or broaden your profile in "openmeta init".`,
+        );
+        return;
       }
 
-      console.log(`     ${chalk.gray('Stars:')} ${issue.repoStars}  ${chalk.gray('Score:')} ${scoreColor(issue.matchScore)}`);
+      selectedIssue = automationIssue;
+      ui.section('Auto-selected issue', `Using the highest-ranked issue that meets the automation threshold (${config.automation.minMatchScore}/100).`);
+      console.log(`\n  ${chalk.bold(selectedIssue.repoFullName)}${chalk.gray('#')}${chalk.white(selectedIssue.number)} - ${chalk.white(selectedIssue.title)}`);
+      console.log(`  ${chalk.gray('Score:')} ${chalk.green(selectedIssue.matchScore.toString())}`);
+    } else {
+      ui.section('Review matched issues', `Showing the top ${displayIssues.length} matches from ${issuesWithScores.length} scored candidates.`);
+      console.log(chalk.bold(`\n  Found ${issuesWithScores.length} matching issues\n`));
+      console.log(chalk.gray('─'.repeat(60)));
 
-      if (issue.analysis.coreDemand) {
-        console.log(`     ${chalk.gray('Demand:')} ${issue.analysis.coreDemand.slice(0, 80)}...`);
+      for (const [index, issue] of displayIssues.entries()) {
+        const scoreColor = issue.matchScore >= 80 ? chalk.green : issue.matchScore >= 70 ? chalk.cyan : chalk.yellow;
+
+        console.log(`\n  ${chalk.bold(`${index + 1}.`)} ${chalk.white(issue.repoFullName)}${chalk.gray('#')}${chalk.white(issue.number)}`);
+        console.log(`     ${chalk.gray('Title:')} ${chalk.white(issue.title)}`);
+
+        if (issue.repoDescription) {
+          console.log(`     ${chalk.gray('About:')} ${chalk.gray(issue.repoDescription.slice(0, 60))}...`);
+        }
+
+        console.log(`     ${chalk.gray('Stars:')} ${issue.repoStars}  ${chalk.gray('Score:')} ${scoreColor(issue.matchScore)}`);
+
+        if (issue.analysis.coreDemand) {
+          console.log(`     ${chalk.gray('Demand:')} ${issue.analysis.coreDemand.slice(0, 80)}...`);
+        }
+        if (issue.analysis.techRequirements.length > 0) {
+          console.log(`     ${chalk.gray('Tech:')} ${chalk.cyan(issue.analysis.techRequirements.join(', '))}`);
+        }
       }
-      if (issue.analysis.techRequirements.length > 0) {
-        console.log(`     ${chalk.gray('Tech:')} ${chalk.cyan(issue.analysis.techRequirements.join(', '))}`);
+
+      console.log(chalk.gray('\n' + '─'.repeat(60)));
+
+      const issueChoices = displayIssues.map((issue, idx) => ({
+        name: `${idx + 1}. ${issue.repoFullName}#${issue.number} - ${issue.title.slice(0, 40)}...`,
+        value: issue.id.toString(),
+      }));
+
+      const { selectedIssueId } = await prompt<{ selectedIssueId: string }>([
+        {
+          type: 'list',
+          name: 'selectedIssueId',
+          message: 'Select an issue to work on:',
+          choices: issueChoices,
+        },
+      ]);
+
+      const issue = issuesWithScores.find(candidate => candidate.id.toString() === selectedIssueId);
+      if (!issue) {
+        throw new Error('Selected issue not found');
       }
+
+      selectedIssue = issue;
     }
 
-    console.log(chalk.gray('\n' + '─'.repeat(60)));
-
-    const issueChoices = displayIssues.map((issue, idx) => ({
-      name: `${idx + 1}. ${issue.repoFullName}#${issue.number} - ${issue.title.slice(0, 40)}...`,
-      value: issue.id.toString(),
-    }));
-
-    const { selectedIssueId } = await prompt<{ selectedIssueId: string }>([
-      {
-        type: 'list',
-        name: 'selectedIssueId',
-        message: 'Select an issue to work on:',
-        choices: issueChoices,
-      },
-    ]);
-
-    const selectedIssue = issuesWithScores.find(
-      issue => issue.id.toString() === selectedIssueId
-    );
-
-    if (!selectedIssue) {
-      throw new Error('Selected issue not found');
-    }
-
-    const { contentType } = await prompt<{ contentType: ContentType }>([
-      {
-        type: 'list',
-        name: 'contentType',
-        message: 'Select content type to generate:',
-        choices: [
-          { name: 'Research Notes', value: 'research_note' },
-          { name: 'Development Diary', value: 'development_diary' },
-        ],
-      },
-    ]);
+    const contentType = defaultContentType || await this.promptForContentType();
 
     let generatedContent: GeneratedContent;
     if (contentType === 'research_note') {
@@ -135,14 +171,7 @@ export class DailyOrchestrator {
       );
       generatedContent = contentService.generateResearchNote([selectedIssue], reportContent);
     } else {
-      const { codeSnippets } = await prompt<{ codeSnippets: string }>([
-        {
-          type: 'editor',
-          name: 'codeSnippets',
-          message: 'Enter code snippets to include (optional, leave empty to skip):',
-          default: '',
-        },
-      ]);
+      const codeSnippets = headless ? '' : await this.promptForCodeSnippets();
 
       ui.section('Generate development diary', `Drafting a diary entry for ${this.formatIssueSummary(selectedIssue)}.`);
       const diaryContent = await llmService.generateDailyDiary(
@@ -152,57 +181,45 @@ export class DailyOrchestrator {
       generatedContent = contentService.generateDiary([selectedIssue], diaryContent);
     }
 
-    ui.section('Review generated note', 'Preview the draft below. You can edit it before creating a commit.');
     const markdown = contentService.formatAsMarkdown(generatedContent);
-    console.log('\n' + markdown);
-
-    const { editContent } = await prompt<{ editContent: boolean }>([
-      {
-        type: 'confirm',
-        name: 'editContent',
-        message: 'Do you want to edit the content before committing?',
-        default: false,
-      },
-    ]);
-
     let finalContent = markdown;
-    if (editContent) {
-      const { editedContent } = await prompt<{ editedContent: string }>([
+
+    if (!headless) {
+      ui.section('Review generated note', 'Preview the draft below. You can edit it before creating a commit.');
+      console.log('\n' + markdown);
+
+      const { editContent } = await prompt<{ editContent: boolean }>([
         {
-          type: 'editor',
-          name: 'editedContent',
-          message: 'Edit the content:',
-          default: markdown,
+          type: 'confirm',
+          name: 'editContent',
+          message: 'Do you want to edit the content before committing?',
+          default: false,
         },
       ]);
-      finalContent = editedContent;
+
+      if (editContent) {
+        const { editedContent } = await prompt<{ editedContent: string }>([
+          {
+            type: 'editor',
+            name: 'editedContent',
+            message: 'Edit the content:',
+            default: markdown,
+          },
+        ]);
+        finalContent = editedContent;
+      }
     }
 
-    const { confirmCommit } = await prompt<{ confirmCommit: boolean }>([
-      {
-        type: 'confirm',
-        name: 'confirmCommit',
-        message: 'Do you want to commit and push to your target repository?',
-        default: false,
-      },
-    ]);
+    const shouldCommit = headless ? true : await this.promptForCommitConfirmation();
 
-    if (confirmCommit) {
+    if (shouldCommit) {
       const gitInitialized = await gitService.initialize(targetRepoPath);
       if (!gitInitialized) {
         throw new Error(`Failed to initialize the target repository at ${targetRepoPath}.`);
       }
 
       const commitMessage = contentService.formatCommitMessage(generatedContent, config.commitTemplate);
-
-      const { finalConfirm } = await prompt<{ finalConfirm: boolean }>([
-        {
-          type: 'confirm',
-          name: 'finalConfirm',
-          message: `Confirm commit message:\n"${commitMessage}"\n\nProceed with commit?`,
-          default: false,
-        },
-      ]);
+      const finalConfirm = headless ? true : await this.promptForFinalCommitConfirmation(commitMessage);
 
       if (finalConfirm) {
         const publishResult = await gitService.addCommitPush(finalContent, commitMessage);
@@ -213,7 +230,9 @@ export class DailyOrchestrator {
         ui.banner({
           label: 'OpenMeta Daily',
           title: 'Contribution note published',
-          subtitle: 'Your generated note was saved and committed successfully.',
+          subtitle: headless
+            ? 'The unattended run completed successfully and pushed the generated note.'
+            : 'Your generated note was saved and committed successfully.',
           lines: [
             `Issue: ${this.formatIssueSummary(selectedIssue)}`,
             `File: ${publishResult.filePath}`,
@@ -266,6 +285,105 @@ export class DailyOrchestrator {
 
   private formatIssueSummary(issue: MatchedIssue): string {
     return `${issue.repoFullName}#${issue.number} (${issue.title})`;
+  }
+
+  private selectIssueForAutomation(issues: MatchedIssue[], minMatchScore: number): MatchedIssue | undefined {
+    return issues.find(issue => issue.matchScore >= minMatchScore);
+  }
+
+  private async promptForContentType(): Promise<ContentType> {
+    const { contentType } = await prompt<{ contentType: ContentType }>([
+      {
+        type: 'list',
+        name: 'contentType',
+        message: 'Select content type to generate:',
+        choices: [
+          { name: 'Research Notes', value: 'research_note' },
+          { name: 'Development Diary', value: 'development_diary' },
+        ],
+      },
+    ]);
+
+    return contentType;
+  }
+
+  private async promptForCodeSnippets(): Promise<string> {
+    const { codeSnippets } = await prompt<{ codeSnippets: string }>([
+      {
+        type: 'editor',
+        name: 'codeSnippets',
+        message: 'Enter code snippets to include (optional, leave empty to skip):',
+        default: '',
+      },
+    ]);
+
+    return codeSnippets;
+  }
+
+  private async promptForCommitConfirmation(): Promise<boolean> {
+    const { confirmCommit } = await prompt<{ confirmCommit: boolean }>([
+      {
+        type: 'confirm',
+        name: 'confirmCommit',
+        message: 'Do you want to commit and push to your target repository?',
+        default: false,
+      },
+    ]);
+
+    return confirmCommit;
+  }
+
+  private async promptForFinalCommitConfirmation(commitMessage: string): Promise<boolean> {
+    const { finalConfirm } = await prompt<{ finalConfirm: boolean }>([
+      {
+        type: 'confirm',
+        name: 'finalConfirm',
+        message: `Confirm commit message:\n"${commitMessage}"\n\nProceed with commit?`,
+        default: false,
+      },
+    ]);
+
+    return finalConfirm;
+  }
+
+  private async confirmManualHeadlessRun(config: AppConfig): Promise<void> {
+    ui.banner({
+      label: 'OpenMeta Daily',
+      title: 'Headless mode runs without prompts',
+      subtitle: 'This mode auto-selects an issue, generates content, and commits to your target repository without interactive review.',
+      lines: [
+        `Automation enabled: ${config.automation.enabled ? 'yes' : 'no'}`,
+        `Scheduled time: ${config.automation.scheduleTime} (${config.automation.timezone})`,
+        `Disable command: openmeta automation disable`,
+      ],
+      tone: 'warning',
+    });
+
+    const { acknowledgeRisk } = await prompt<{ acknowledgeRisk: boolean }>([
+      {
+        type: 'confirm',
+        name: 'acknowledgeRisk',
+        message: 'Do you understand that headless mode will commit and push without another review step?',
+        default: false,
+      },
+    ]);
+
+    if (!acknowledgeRisk) {
+      throw new Error('Headless run cancelled because the automation warning was not acknowledged.');
+    }
+
+    const { finalConsent } = await prompt<{ finalConsent: boolean }>([
+      {
+        type: 'confirm',
+        name: 'finalConsent',
+        message: 'Run headless mode now?',
+        default: false,
+      },
+    ]);
+
+    if (!finalConsent) {
+      throw new Error('Headless run cancelled at final confirmation.');
+    }
   }
 
   private showSessionSummary(issue: MatchedIssue, title: string, subtitle: string): void {

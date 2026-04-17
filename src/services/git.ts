@@ -1,6 +1,7 @@
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { getDailyNoteFileName } from '../infra/date.js';
 import { logger } from '../infra/logger.js';
 
 export interface GitPublishResult {
@@ -43,7 +44,7 @@ export class GitService {
     }
 
     try {
-      const fileName = `openmeta-daily-${new Date().toISOString().split('T')[0]}.md`;
+      const fileName = getDailyNoteFileName();
       const filePath = join(this.repoPath, fileName);
       writeFileSync(filePath, content, 'utf-8');
 

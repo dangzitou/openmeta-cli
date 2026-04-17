@@ -8,6 +8,18 @@ import { logger } from './logger.js';
 const CONFIG_DIR = join(homedir(), '.config', 'openmeta');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
+function getDefaultSchedulerProvider(): AppConfig['automation']['scheduler'] {
+  if (process.platform === 'darwin') {
+    return 'launchd';
+  }
+
+  if (process.platform === 'linux') {
+    return 'cron';
+  }
+
+  return 'manual';
+}
+
 function createDefaultConfig(): AppConfig {
   return {
     userProfile: {
@@ -25,6 +37,15 @@ function createDefaultConfig(): AppConfig {
       apiBaseUrl: 'https://api.openai.com/v1',
       apiKey: '',
       modelName: 'gpt-4o-mini',
+    },
+    automation: {
+      enabled: true,
+      scheduleTime: '09:00',
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      contentType: 'research_note',
+      scheduler: getDefaultSchedulerProvider(),
+      minMatchScore: 70,
+      skipIfAlreadyGeneratedToday: true,
     },
     commitTemplate: 'feat(daily): {{title}}\n\n{{content}}',
   };
@@ -134,6 +155,10 @@ export class ConfigService {
       llm: {
         ...defaults.llm,
         ...config.llm,
+      },
+      automation: {
+        ...defaults.automation,
+        ...config.automation,
       },
     };
   }
