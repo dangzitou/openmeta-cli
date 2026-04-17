@@ -1,9 +1,9 @@
-import inquirer from 'inquirer';
 import chalk from 'chalk';
+import { existsSync } from 'fs';
 import type { AppConfig } from '../types/index.js';
 import type { UserProficiency } from '../types/config.types.js';
 import { githubService, llmService } from '../services/index.js';
-import { configService } from '../infra/index.js';
+import { configService, prompt, ui } from '../infra/index.js';
 
 interface LLMProviderOption {
   name: string;
@@ -11,37 +11,6 @@ interface LLMProviderOption {
   baseUrl: string;
   models: Array<{ name: string; value: string }>;
 }
-
-const BANNER = `
-${chalk.bold.cyan('  ╔═══════════════════════════════════════╗')}
-${chalk.bold.cyan('  ║         Welcome to OpenMeta CLI       ║')}
-${chalk.bold.cyan('  ╚═══════════════════════════════════════╝')}
-`;
-
-const WELCOME_TEXT = `
-  ${chalk.cyan('◆')} ${chalk.white('Your daily open source growth companion')}
-
-  This tool helps you:
-  ${chalk.gray('  •')} Find relevant GitHub issues to contribute
-  ${chalk.gray('  •')} Generate meaningful daily commits automatically
-  ${chalk.gray('  •')} Track your open source contribution journey
-
-${chalk.gray('─'.repeat(50))}
-${chalk.bold.cyan("  Let's get started!")}
-${chalk.gray('─'.repeat(50))}
-`;
-
-const SUCCESS_BANNER = `
-${chalk.green('  ╔═══════════════════════════════════════╗')}
-${chalk.green('  ║         ✅  Setup Complete!           ║')}
-${chalk.green('  ╚═══════════════════════════════════════╝')}
-`;
-
-const STEP_DIVIDER = (step: string) => `
-${chalk.cyan('─'.repeat(50))}
-${chalk.bold.cyan(step)}
-${chalk.cyan('─'.repeat(50))}
-`;
 
 const LLM_PROVIDERS: LLMProviderOption[] = [
   {
@@ -99,12 +68,19 @@ const FOCUS_AREA_CHOICES = [
 
 export class InitOrchestrator {
   async execute(): Promise<void> {
-    console.log(BANNER);
-    console.log(WELCOME_TEXT);
+    ui.banner({
+      label: 'OpenMeta Init',
+      title: 'Build your contribution workspace',
+      subtitle: 'We will verify GitHub access, connect an LLM provider, and save your matching profile.',
+      lines: [
+        'Everything stays local except the API calls you explicitly configure.',
+        'Press Ctrl+C at any time to leave the setup cleanly.',
+      ],
+    });
 
     const config = await configService.get();
 
-    console.log(STEP_DIVIDER('STEP 1  ·  GitHub Configuration'));
+    ui.section('Step 1 · GitHub access', 'OpenMeta needs a GitHub token so it can discover and rank contribution issues.');
 
     let pat = '';
     let username = '';
@@ -118,26 +94,30 @@ export class InitOrchestrator {
       ghValid = await githubService.validateCredentials();
 
       if (!ghValid) {
-        console.log(`\n  ${chalk.red('✖')} ${chalk.red('GitHub token validation failed')}\n`);
-        console.log(`  ${chalk.gray('→')} ${chalk.white('Make sure your PAT has permissions:')}`);
-        console.log(`    ${chalk.gray('•')} repo (Full repository access)`);
-        console.log(`    ${chalk.gray('•')} user (Read user profile info)\n`);
-        const { retry } = await inquirer.prompt<{ retry: boolean }>([
+        console.log(`\n  ${chalk.red('GitHub validation failed.')}`);
+        console.log(`  ${chalk.gray('Suggested scopes:')} ${chalk.white('repo, user')}\n`);
+
+        const { retry } = await prompt<{ retry: boolean }>([
           {
             type: 'confirm',
             name: 'retry',
-            message: '  Try again?',
+            message: 'Try another GitHub token?',
             default: true,
           },
         ]);
         if (!retry) {
-          console.log(`\n  ${chalk.gray('›')} ${chalk.gray('Initialization cancelled')}\n`);
+          ui.banner({
+            label: 'OpenMeta Init',
+            title: 'Setup paused',
+            subtitle: 'GitHub access was not configured. Run "openmeta init" again whenever you are ready.',
+            tone: 'warning',
+          });
           return;
         }
       }
     }
 
-    console.log(STEP_DIVIDER('STEP 2  ·  LLM API Configuration'));
+    ui.section('Step 2 · LLM provider', 'Your model is used to score issues and draft research notes or diaries.');
 
     let providerValue = '';
     let selectedProvider: LLMProviderOption | undefined;
@@ -146,11 +126,11 @@ export class InitOrchestrator {
     let llmValid = false;
 
     while (!llmValid) {
-      const providerAnswer = await inquirer.prompt<{ providerValue: string }>([
+      const providerAnswer = await prompt<{ providerValue: string }>([
         {
           type: 'list',
           name: 'providerValue',
-          message: '  Select LLM provider:',
+          message: 'Select LLM provider:',
           choices: LLM_PROVIDERS.map(provider => ({
             name: provider.name,
             value: provider.value,
@@ -164,11 +144,11 @@ export class InitOrchestrator {
         throw new Error(`Provider not found: ${providerValue}`);
       }
 
-      const modelAnswer = await inquirer.prompt<{ modelValue: string }>([
+      const modelAnswer = await prompt<{ modelValue: string }>([
         {
           type: 'list',
           name: 'modelValue',
-          message: '  Select model:',
+          message: 'Select model:',
           choices: selectedProvider.models.map(model => ({
             name: model.name,
             value: model.value,
@@ -183,26 +163,32 @@ export class InitOrchestrator {
       llmValid = await llmService.validateConnection();
 
       if (!llmValid) {
-        console.log(`\n  ${chalk.red('✖')} ${chalk.red('LLM API connection failed')}`);
-        console.log(`  ${chalk.gray('→')} ${chalk.white('Please check your API key and try again')}\n`);
-        const { retry } = await inquirer.prompt<{ retry: boolean }>([
+        console.log(`\n  ${chalk.red('LLM validation failed.')}`);
+        console.log(`  ${chalk.gray('Check the provider, model, and API key, then try again.')}\n`);
+
+        const { retry } = await prompt<{ retry: boolean }>([
           {
             type: 'confirm',
             name: 'retry',
-            message: '  Try again?',
+            message: 'Try another provider or API key?',
             default: true,
           },
         ]);
         if (!retry) {
-          console.log(`\n  ${chalk.gray('›')} ${chalk.gray('Initialization cancelled')}\n`);
+          ui.banner({
+            label: 'OpenMeta Init',
+            title: 'Setup paused',
+            subtitle: 'The LLM provider was not configured. Run "openmeta init" again when you want to continue.',
+            tone: 'warning',
+          });
           return;
         }
       }
     }
 
-    console.log(STEP_DIVIDER('STEP 3  ·  User Profile'));
+    ui.section('Step 3 · Your matching profile', 'Choose the stack and focus areas that should influence issue scoring.');
 
-    const { techStack, proficiency, focusAreas } = await inquirer.prompt<{
+    const { techStack, proficiency, focusAreas } = await prompt<{
       techStack: string[];
       proficiency: UserProficiency;
       focusAreas: string[];
@@ -216,7 +202,7 @@ export class InitOrchestrator {
           value: tech,
           checked: config.userProfile.techStack.includes(tech),
         })),
-        validate: (input) => input.length > 0 || 'Select at least one technology',
+        validate: (input: string[]) => input.length > 0 || 'Select at least one technology',
       },
       {
         type: 'list',
@@ -237,18 +223,35 @@ export class InitOrchestrator {
           ...area,
           checked: config.userProfile.focusAreas.includes(area.value),
         })),
-        validate: (input) => input.length > 0 || 'Select at least one focus area',
+        validate: (input: string[]) => input.length > 0 || 'Select at least one focus area',
       },
     ]);
 
-    console.log(STEP_DIVIDER('STEP 4  ·  Target Repository (Optional)'));
+    ui.section('Step 4 · Target repository', 'Leave this blank if you want OpenMeta to manage a dedicated private repo for you.');
 
-    const { targetRepoPath } = await inquirer.prompt<{ targetRepoPath: string }>([
+    const { targetRepoPath } = await prompt<{ targetRepoPath: string }>([
       {
         type: 'input',
         name: 'targetRepoPath',
-        message: '  Enter path to your private repository (optional):',
+        message: 'Enter the path to your private repository (optional):',
         default: config.github.targetRepoPath || '',
+        filter: (input: string) => input.trim(),
+        validate: async (input: string) => {
+          if (!input) {
+            return true;
+          }
+
+          if (!existsSync(input)) {
+            return 'This path does not exist.';
+          }
+
+          const isValidRepo = await githubService.validateTargetRepo(input);
+          if (!isValidRepo) {
+            return 'This path must be a git repository with a configured remote.';
+          }
+
+          return true;
+        },
       },
     ]);
 
@@ -274,47 +277,58 @@ export class InitOrchestrator {
 
     await configService.save(newConfig);
 
-    console.log(SUCCESS_BANNER);
-    console.log(`  ${chalk.green('✔')} ${chalk.white('Configuration saved to:')} ${chalk.gray(configService.getConfigPath())}`);
-    console.log(`\n  ${chalk.white('Run')} ${chalk.cyan('openmeta daily')} ${chalk.white('to start your daily contribution!')}\n`);
+    ui.banner({
+      label: 'OpenMeta Init',
+      title: 'Setup complete',
+      subtitle: 'Your local workspace is ready for daily issue discovery and note generation.',
+      lines: [
+        `GitHub account: ${username}`,
+        `Model: ${selectedProvider!.name} / ${modelValue}`,
+        `Target repo: ${targetRepoPath || 'Auto-managed private repository'}`,
+        `Config saved at: ${configService.getConfigPath()}`,
+        'Next step: run "openmeta daily".',
+      ],
+      tone: 'success',
+    });
   }
 
   private async promptGitHubPAT(): Promise<string> {
-    const { pat } = await inquirer.prompt<{ pat: string }>([
+    const { pat } = await prompt<{ pat: string }>([
       {
         type: 'password',
         name: 'pat',
         message: 'Enter your GitHub Personal Access Token (PAT):',
         mask: '*',
-        validate: (input) => input.length > 0 || 'PAT is required',
+        validate: (input: string) => input.trim().length > 0 || 'PAT is required.',
       },
     ]);
-    return pat;
+    return pat.trim();
   }
 
   private async promptAPIKey(): Promise<string> {
-    const { apiKey } = await inquirer.prompt<{ apiKey: string }>([
+    const { apiKey } = await prompt<{ apiKey: string }>([
       {
         type: 'password',
         name: 'apiKey',
         message: 'Enter your LLM API Key:',
         mask: '*',
-        validate: (input) => input.length > 0 || 'API Key is required',
+        validate: (input: string) => input.trim().length > 0 || 'API key is required.',
       },
     ]);
-    return apiKey;
+    return apiKey.trim();
   }
 
   private async promptUsername(): Promise<string> {
-    const { username } = await inquirer.prompt<{ username: string }>([
+    const { username } = await prompt<{ username: string }>([
       {
         type: 'input',
         name: 'username',
         message: 'Enter your GitHub username:',
-        validate: (input) => input.length > 0 || 'Username is required',
+        filter: (input: string) => input.trim(),
+        validate: (input: string) => input.trim().length > 0 || 'GitHub username is required.',
       },
     ]);
-    return username;
+    return username.trim();
   }
 }
 

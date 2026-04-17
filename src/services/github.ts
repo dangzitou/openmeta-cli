@@ -39,8 +39,8 @@ export class GitHubService {
       logger.success(`GitHub authenticated as: ${data.login}`);
       return true;
     } catch (error) {
-      const err = error as { status?: number; message?: string };
-      logger.error(`GitHub credential validation failed: ${err.status} - ${err.message}`);
+      logger.warn('GitHub token validation failed.');
+      logger.debug('GitHub token validation failed', error);
       return false;
     }
   }
@@ -111,8 +111,8 @@ export class GitHubService {
 
       logger.success(`Fetched ${issues.length} trending issues from ${FILTER_LABELS.length} label searches`);
     } catch (error) {
-      logger.error('Failed to fetch trending issues:', error);
-      throw error;
+      logger.debug('Failed to fetch trending issues', error);
+      throw new Error('GitHub issue discovery failed. Please try again in a moment.');
     }
 
     return issues;

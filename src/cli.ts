@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from 'commander';
 import { registerInitCommand, registerDailyCommand, registerConfigCommand } from './commands/index.js';
-import { logger } from './infra/index.js';
+import { getErrorMessage, ui } from './infra/index.js';
 
 const VERSION = '1.0.0';
 
@@ -12,14 +12,16 @@ async function main(): Promise<void> {
     .name('openmeta')
     .description("OpenMeta CLI - Developer's daily open source growth companion")
     .version(VERSION, '-v, --version', 'Show version')
-    .helpOption('-h, --help', 'Show help');
+    .helpOption('-h, --help', 'Show help')
+    .showSuggestionAfterError()
+    .showHelpAfterError();
 
   registerInitCommand(program);
   registerDailyCommand(program);
   registerConfigCommand(program);
 
   program.on('command:*', () => {
-    console.error('Invalid command: %s\nSee --help for a list of available commands.', program.args.join(' '));
+    ui.commandFailed('openmeta', `Unknown command "${program.args.join(' ')}". Run "openmeta --help" to see available commands.`);
     process.exit(1);
   });
 
@@ -31,6 +33,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  logger.error('Unhandled error:', error);
+  ui.commandFailed('openmeta', getErrorMessage(error));
   process.exit(1);
 });

@@ -31,7 +31,8 @@ export class LLMService {
       logger.success('LLM API connection validated');
       return true;
     } catch (error) {
-      logger.error('LLM API connection failed:', error);
+      logger.warn('LLM API connection check failed.');
+      logger.debug('LLM API connection check failed', error);
       return false;
     }
   }
@@ -95,8 +96,8 @@ Repo Stars: ${i.repoStars}`
       const content = response.choices[0]?.message?.content || '';
       return content;
     } catch (error) {
-      logger.error('LLM chat failed:', error);
-      throw error;
+      logger.debug('LLM chat failed', error);
+      throw new Error('The LLM request failed. Please verify your provider, model, and API key.');
     }
   }
 

@@ -3,13 +3,20 @@ import { existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../infra/logger.js';
 
+export interface GitPublishResult {
+  branch: string;
+  fileName: string;
+  filePath: string;
+  pushed: boolean;
+}
+
 export class GitService {
   private git: SimpleGit | null = null;
   private repoPath: string = '';
 
   async initialize(repoPath: string): Promise<boolean> {
     if (!existsSync(repoPath)) {
-      logger.error(`Repository path does not exist: ${repoPath}`);
+      logger.warn(`Target repository path does not exist: ${repoPath}`);
       return false;
     }
 
@@ -18,18 +25,19 @@ export class GitService {
       this.repoPath = repoPath;
       const isRepo = await this.git.checkIsRepo();
       if (!isRepo) {
-        logger.error(`Path is not a git repository: ${repoPath}`);
+        logger.warn(`Target path is not a git repository: ${repoPath}`);
         return false;
       }
       logger.success(`Git repository initialized: ${repoPath}`);
       return true;
     } catch (error) {
-      logger.error('Failed to initialize git:', error);
+      logger.debug('Failed to initialize git', error);
+      logger.warn('Unable to access the target repository.');
       return false;
     }
   }
 
-  async addCommitPush(content: string, commitMessage: string): Promise<boolean> {
+  async addCommitPush(content: string, commitMessage: string): Promise<GitPublishResult | null> {
     if (!this.git) {
       throw new Error('Git service not initialized');
     }
@@ -50,6 +58,7 @@ export class GitService {
       logger.debug(`Commit created: ${commitMessage}`);
 
       const remotes = await this.git.getRemotes();
+      const pushed = remotes.length > 0;
       if (remotes.length > 0) {
         await this.git.raw(['push', '--set-upstream', 'origin', branch]);
         logger.success('Changes pushed to remote');
@@ -57,10 +66,16 @@ export class GitService {
         logger.warn('No remote configured, skipping push');
       }
 
-      return true;
+      return {
+        branch,
+        fileName,
+        filePath,
+        pushed,
+      };
     } catch (error) {
-      logger.error('Git operation failed:', error);
-      return false;
+      logger.debug('Git operation failed', error);
+      logger.warn('Unable to write, commit, or push the generated note.');
+      return null;
     }
   }
 

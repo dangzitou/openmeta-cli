@@ -1,11 +1,10 @@
-import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { existsSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import type { AppConfig, MatchedIssue, GeneratedContent } from '../types/index.js';
 import { githubService, llmService, contentService, gitService } from '../services/index.js';
-import { logger, configService } from '../infra/index.js';
+import { logger, configService, prompt, ui } from '../infra/index.js';
 import type { ContentType } from '../types/content.types.js';
 import { Octokit } from '@octokit/rest';
 import { simpleGit, type SimpleGit } from 'simple-git';
@@ -14,16 +13,24 @@ export class DailyOrchestrator {
   private octokit: Octokit | null = null;
 
   async execute(): Promise<void> {
-    logger.info('Starting daily open source workflow...');
+    ui.banner({
+      label: 'OpenMeta Daily',
+      title: 'Start a focused contribution session',
+      subtitle: 'We will validate your setup, rank onboarding issues, and draft a note you can optionally commit.',
+      lines: [
+        'Press Ctrl+C at any prompt to close the session cleanly.',
+      ],
+    });
 
     const config = await configService.get();
 
+    ui.section('Workspace check', 'Verifying credentials, model access, and your target repository.');
     await this.validateConfig(config);
 
     githubService.initialize(config.github.pat, config.github.username);
     const ghValid = await githubService.validateCredentials();
     if (!ghValid) {
-      throw new Error('GitHub credentials validation failed');
+      throw new Error('GitHub credentials validation failed. Run "openmeta init" to refresh your token.');
     }
 
     this.octokit = new Octokit({ auth: config.github.pat });
@@ -31,32 +38,39 @@ export class DailyOrchestrator {
     llmService.initialize(config.llm.apiKey, config.llm.apiBaseUrl, config.llm.modelName);
     const llmValid = await llmService.validateConnection();
     if (!llmValid) {
-      throw new Error('LLM API connection failed');
+      throw new Error('LLM API connection failed. Run "openmeta init" to update your provider settings.');
     }
 
     const targetRepoPath = await this.ensureTargetRepo(config);
 
-    logger.info('Fetching and filtering issues...');
+    ui.section('Find candidate issues', 'Searching GitHub for active onboarding issues that match your profile.');
     const issues = await githubService.fetchTrendingIssues();
     if (issues.length === 0) {
-      logger.warn('No issues found matching criteria');
+      ui.emptyState(
+        'OpenMeta Daily',
+        'No onboarding issues found',
+        'GitHub did not return any open "good first issue" or "help wanted" items for this search window.',
+      );
       return;
     }
 
     const issuesWithScores = await this.scoreIssuesInBatches(config.userProfile, issues);
 
     if (issuesWithScores.length === 0) {
-      logger.warn('No issues matched user profile (score >= 60)');
+      ui.emptyState(
+        'OpenMeta Daily',
+        'No strong matches yet',
+        'Issues were found, but none scored high enough for your current profile. Try broadening your tech stack or focus areas in "openmeta init".',
+      );
       return;
     }
 
-    // Always show at least top results
     const displayIssues = issuesWithScores.slice(0, 10);
 
+    ui.section('Review matched issues', `Showing the top ${displayIssues.length} matches from ${issuesWithScores.length} scored candidates.`);
     console.log(chalk.bold(`\n  Found ${issuesWithScores.length} matching issues\n`));
     console.log(chalk.gray('─'.repeat(60)));
 
-    // Show issues with beautiful formatting
     for (const [index, issue] of displayIssues.entries()) {
       const scoreColor = issue.matchScore >= 80 ? chalk.green : issue.matchScore >= 70 ? chalk.cyan : chalk.yellow;
 
@@ -79,13 +93,12 @@ export class DailyOrchestrator {
 
     console.log(chalk.gray('\n' + '─'.repeat(60)));
 
-    // Let user select which issue to work on
     const issueChoices = displayIssues.map((issue, idx) => ({
       name: `${idx + 1}. ${issue.repoFullName}#${issue.number} - ${issue.title.slice(0, 40)}...`,
       value: issue.id.toString(),
     }));
 
-    const { selectedIssueId } = await inquirer.prompt<{ selectedIssueId: string }>([
+    const { selectedIssueId } = await prompt<{ selectedIssueId: string }>([
       {
         type: 'list',
         name: 'selectedIssueId',
@@ -102,7 +115,7 @@ export class DailyOrchestrator {
       throw new Error('Selected issue not found');
     }
 
-    const { contentType } = await inquirer.prompt<{ contentType: ContentType }>([
+    const { contentType } = await prompt<{ contentType: ContentType }>([
       {
         type: 'list',
         name: 'contentType',
@@ -116,12 +129,13 @@ export class DailyOrchestrator {
 
     let generatedContent: GeneratedContent;
     if (contentType === 'research_note') {
+      ui.section('Generate research note', `Drafting a structured note for ${this.formatIssueSummary(selectedIssue)}.`);
       const reportContent = await llmService.generateDailyReport(
         `${selectedIssue.repoFullName}#${selectedIssue.number}: ${selectedIssue.title}\n${selectedIssue.analysis.coreDemand}`
       );
       generatedContent = contentService.generateResearchNote([selectedIssue], reportContent);
     } else {
-      const { codeSnippets } = await inquirer.prompt<{ codeSnippets: string }>([
+      const { codeSnippets } = await prompt<{ codeSnippets: string }>([
         {
           type: 'editor',
           name: 'codeSnippets',
@@ -130,6 +144,7 @@ export class DailyOrchestrator {
         },
       ]);
 
+      ui.section('Generate development diary', `Drafting a diary entry for ${this.formatIssueSummary(selectedIssue)}.`);
       const diaryContent = await llmService.generateDailyDiary(
         `${selectedIssue.repoFullName}#${selectedIssue.number}: ${selectedIssue.title}\n${selectedIssue.analysis.coreDemand}`,
         codeSnippets
@@ -137,10 +152,11 @@ export class DailyOrchestrator {
       generatedContent = contentService.generateDiary([selectedIssue], diaryContent);
     }
 
+    ui.section('Review generated note', 'Preview the draft below. You can edit it before creating a commit.');
     const markdown = contentService.formatAsMarkdown(generatedContent);
     console.log('\n' + markdown);
 
-    const { editContent } = await inquirer.prompt<{ editContent: boolean }>([
+    const { editContent } = await prompt<{ editContent: boolean }>([
       {
         type: 'confirm',
         name: 'editContent',
@@ -151,7 +167,7 @@ export class DailyOrchestrator {
 
     let finalContent = markdown;
     if (editContent) {
-      const { editedContent } = await inquirer.prompt<{ editedContent: string }>([
+      const { editedContent } = await prompt<{ editedContent: string }>([
         {
           type: 'editor',
           name: 'editedContent',
@@ -162,7 +178,7 @@ export class DailyOrchestrator {
       finalContent = editedContent;
     }
 
-    const { confirmCommit } = await inquirer.prompt<{ confirmCommit: boolean }>([
+    const { confirmCommit } = await prompt<{ confirmCommit: boolean }>([
       {
         type: 'confirm',
         name: 'confirmCommit',
@@ -174,12 +190,12 @@ export class DailyOrchestrator {
     if (confirmCommit) {
       const gitInitialized = await gitService.initialize(targetRepoPath);
       if (!gitInitialized) {
-        throw new Error('Failed to initialize git repository');
+        throw new Error(`Failed to initialize the target repository at ${targetRepoPath}.`);
       }
 
       const commitMessage = contentService.formatCommitMessage(generatedContent, config.commitTemplate);
 
-      const { finalConfirm } = await inquirer.prompt<{ finalConfirm: boolean }>([
+      const { finalConfirm } = await prompt<{ finalConfirm: boolean }>([
         {
           type: 'confirm',
           name: 'finalConfirm',
@@ -189,17 +205,28 @@ export class DailyOrchestrator {
       ]);
 
       if (finalConfirm) {
-        const success = await gitService.addCommitPush(finalContent, commitMessage);
-        if (success) {
-          logger.success('Daily contribution completed!');
-        } else {
-          logger.error('Failed to complete commit');
+        const publishResult = await gitService.addCommitPush(finalContent, commitMessage);
+        if (!publishResult) {
+          throw new Error('The note could not be committed to your target repository.');
         }
+
+        ui.banner({
+          label: 'OpenMeta Daily',
+          title: 'Contribution note published',
+          subtitle: 'Your generated note was saved and committed successfully.',
+          lines: [
+            `Issue: ${this.formatIssueSummary(selectedIssue)}`,
+            `File: ${publishResult.filePath}`,
+            `Branch: ${publishResult.branch}`,
+            publishResult.pushed ? 'Remote sync: pushed to origin' : 'Remote sync: skipped because no remote was configured',
+          ],
+          tone: 'success',
+        });
       } else {
-        logger.info('Commit cancelled by user');
+        this.showSessionSummary(selectedIssue, 'Draft complete', 'The note was generated, but commit creation was skipped at the final confirmation step.');
       }
     } else {
-      logger.info('Commit skipped by user');
+      this.showSessionSummary(selectedIssue, 'Draft ready', 'The note was generated and previewed, but no git commit was created.');
     }
   }
 
@@ -235,6 +262,23 @@ export class DailyOrchestrator {
     }
 
     return [...matches.values()].sort((left, right) => right.matchScore - left.matchScore);
+  }
+
+  private formatIssueSummary(issue: MatchedIssue): string {
+    return `${issue.repoFullName}#${issue.number} (${issue.title})`;
+  }
+
+  private showSessionSummary(issue: MatchedIssue, title: string, subtitle: string): void {
+    ui.banner({
+      label: 'OpenMeta Daily',
+      title,
+      subtitle,
+      lines: [
+        `Issue: ${this.formatIssueSummary(issue)}`,
+        'You can rerun "openmeta daily" whenever you want to generate a new draft.',
+      ],
+      tone: 'success',
+    });
   }
 
   private async ensureTargetRepo(config: AppConfig): Promise<string> {

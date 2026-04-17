@@ -1,5 +1,4 @@
-import inquirer from 'inquirer';
-import { configService, logger } from '../infra/index.js';
+import { configService, logger, prompt, ui } from '../infra/index.js';
 import type { AppConfig } from '../types/index.js';
 
 export class ConfigOrchestrator {
@@ -75,7 +74,7 @@ export class ConfigOrchestrator {
   }
 
   async reset(): Promise<void> {
-    const { confirm } = await inquirer.prompt<{ confirm: boolean }>([
+    const { confirm } = await prompt<{ confirm: boolean }>([
       {
         type: 'confirm',
         name: 'confirm',
@@ -86,7 +85,13 @@ export class ConfigOrchestrator {
 
     if (confirm) {
       await configService.reset();
-      logger.success('Configuration reset to defaults');
+      ui.banner({
+        label: 'OpenMeta Config',
+        title: 'Configuration reset',
+        subtitle: 'Local settings were restored to their defaults.',
+        lines: [`Config file: ${configService.getConfigPath()}`],
+        tone: 'success',
+      });
     } else {
       logger.info('Reset cancelled');
     }
