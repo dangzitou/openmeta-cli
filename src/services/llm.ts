@@ -37,8 +37,12 @@ export class LLMService {
   }
 
   async scoreIssues(userProfile: UserProfile, issues: GitHubIssue[]): Promise<MatchedIssue[]> {
+    if (issues.length === 0) {
+      return [];
+    }
+
     const issueList = issues.map(i =>
-      `Issue #${i.number} in ${i.repoFullName}
+      `Issue Reference: ${this.getIssueReference(i)}
 Title: ${i.title}
 Body: ${i.body.slice(0, 500)}
 Labels: ${i.labels.join(', ')}
@@ -53,8 +57,7 @@ Repo Stars: ${i.repoStars}`
 
     const content = await this.chat(prompt);
 
-    const matchedIssues = this.parseLLMResponse(content, issues);
-    return matchedIssues.slice(0, 3);
+    return this.parseLLMResponse(content, issues);
   }
 
   async generateDailyReport(issueAnalysis: string): Promise<string> {
@@ -102,22 +105,26 @@ Repo Stars: ${i.repoStars}`
     const lines = content.split('\n');
 
     for (const issue of originalIssues) {
-      // Find the line for this issue - look for "#issue_number" pattern
-      const issueLineIndex = lines.findIndex(line => line.includes(`#${issue.number}`));
+      const issueReference = this.getIssueReference(issue);
+      const issueLinePattern = new RegExp(`^${this.escapeRegExp(issueReference)}\\b`, 'i');
+      const issueLineIndex = lines.findIndex(line => issueLinePattern.test(line.trim()));
       if (issueLineIndex === -1) continue;
 
-      // Extract score from format like "#123 [SCORE: 85]" or "#123 Score: 85"
       const issueLine = lines[issueLineIndex];
+      if (!issueLine) {
+        continue;
+      }
+
       const scoreMatch = issueLine.match(/SCORE:\s*(\d+)|Score:\s*(\d+)|#\d+\s*(\d+)/i);
       let score = 0;
       if (scoreMatch) {
-        score = parseInt(scoreMatch[1] || scoreMatch[2] || scoreMatch[3], 10) || 0;
+        const rawScore = scoreMatch[1] || scoreMatch[2] || scoreMatch[3];
+        score = rawScore ? parseInt(rawScore, 10) || 0 : 0;
       }
-      // Clamp score to 0-100 range
+
       score = Math.min(100, Math.max(0, score));
 
       if (score >= 60) {
-        // Get context lines around the issue line for analysis
         const context = lines.slice(issueLineIndex, issueLineIndex + 5).join('\n');
 
         const demandMatch = context.match(/Core Demand:\s*([^\n]+)/i);
@@ -138,6 +145,14 @@ Repo Stars: ${i.repoStars}`
     }
 
     return matchedIssues.sort((a, b) => b.matchScore - a.matchScore);
+  }
+
+  private getIssueReference(issue: GitHubIssue): string {
+    return `${issue.repoFullName}#${issue.number}`;
+  }
+
+  private escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 }
 

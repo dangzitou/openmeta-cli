@@ -2,8 +2,8 @@ export const ISSUE_MATCH_PROMPT = `You are a professional open source contributi
 
 User Tech Profile: {{userProfile}}
 
-Output format - STRICTLY follow this format for EACH issue:
-#{issue_number} [SCORE: 0-100]
+Output format - STRICTLY follow this format for EACH matched issue:
+{owner}/{repo}#{issue_number} [SCORE: 0-100]
 Core Demand: [one sentence]
 Tech Requirements: [comma separated list]
 Estimated Workload: [e.g., 1-2 hours]
@@ -14,8 +14,9 @@ Requirements:
 3. Focus area match is second (30% weight)
 4. Difficulty match is third (20% weight)
 5. Only include issues with score >= 60
-6. ALWAYS output AT LEAST 5 issues (fill to 5 if needed)
-7. Output in EXACT format above, no markdown, no headers, no extra text
+6. Use the exact issue reference shown in the input for every matched issue
+7. Do not invent issues or references that are not in the input
+8. Output in EXACT format above, no markdown, no headers, no extra text
 
 Issues to analyze: {{issueList}}`;
 

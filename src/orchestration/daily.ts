@@ -42,17 +42,7 @@ export class DailyOrchestrator {
       return;
     }
 
-    // Limit issues sent to LLM to first 30 to avoid token limits
-    const issuesForScoring = issues.slice(0, 30);
-    let issuesWithScores = await llmService.scoreIssues(config.userProfile, issuesForScoring);
-
-    // If fewer than 3 results, try with lower threshold
-    if (issuesWithScores.length < 3 && issues.length > 30) {
-      // Try with more issues
-      const moreIssues = issues.slice(30, 60);
-      const moreResults = await llmService.scoreIssues(config.userProfile, moreIssues);
-      issuesWithScores = [...issuesWithScores, ...moreResults].sort((a, b) => b.matchScore - a.matchScore);
-    }
+    const issuesWithScores = await this.scoreIssuesInBatches(config.userProfile, issues);
 
     if (issuesWithScores.length === 0) {
       logger.warn('No issues matched user profile (score >= 60)');
@@ -66,11 +56,10 @@ export class DailyOrchestrator {
     console.log(chalk.gray('─'.repeat(60)));
 
     // Show issues with beautiful formatting
-    for (let i = 0; i < displayIssues.length; i++) {
-      const issue = displayIssues[i];
+    for (const [index, issue] of displayIssues.entries()) {
       const scoreColor = issue.matchScore >= 80 ? chalk.green : issue.matchScore >= 70 ? chalk.cyan : chalk.yellow;
 
-      console.log(`\n  ${chalk.bold(`${i + 1}.`)} ${chalk.white(issue.repoFullName)}${chalk.gray('#')}${chalk.white(issue.number)}`);
+      console.log(`\n  ${chalk.bold(`${index + 1}.`)} ${chalk.white(issue.repoFullName)}${chalk.gray('#')}${chalk.white(issue.number)}`);
       console.log(`     ${chalk.gray('Title:')} ${chalk.white(issue.title)}`);
 
       if (issue.repoDescription) {
@@ -92,20 +81,20 @@ export class DailyOrchestrator {
     // Let user select which issue to work on
     const issueChoices = displayIssues.map((issue, idx) => ({
       name: `${idx + 1}. ${issue.repoFullName}#${issue.number} - ${issue.title.slice(0, 40)}...`,
-      value: issue.number.toString(),
+      value: issue.id.toString(),
     }));
 
-    const { selectedIssueNumber } = await inquirer.prompt<{ selectedIssueNumber: string }>([
+    const { selectedIssueId } = await inquirer.prompt<{ selectedIssueId: string }>([
       {
         type: 'list',
-        name: 'selectedIssueNumber',
+        name: 'selectedIssueId',
         message: 'Select an issue to work on:',
         choices: issueChoices,
       },
     ]);
 
     const selectedIssue = issuesWithScores.find(
-      i => i.number.toString() === selectedIssueNumber
+      issue => issue.id.toString() === selectedIssueId
     );
 
     if (!selectedIssue) {
@@ -220,6 +209,31 @@ export class DailyOrchestrator {
     if (!config.llm.apiKey) {
       throw new Error('LLM API configuration is incomplete. Please run "openmeta init" first.');
     }
+  }
+
+  private async scoreIssuesInBatches(
+    userProfile: AppConfig['userProfile'],
+    issues: Awaited<ReturnType<typeof githubService.fetchTrendingIssues>>,
+  ): Promise<MatchedIssue[]> {
+    const batchSize = 20;
+    const maxCandidates = Math.min(issues.length, 80);
+    const targetMatches = 10;
+    const matches = new Map<number, MatchedIssue>();
+
+    for (let start = 0; start < maxCandidates; start += batchSize) {
+      const batch = issues.slice(start, start + batchSize);
+      const scoredBatch = await llmService.scoreIssues(userProfile, batch);
+
+      for (const issue of scoredBatch) {
+        matches.set(issue.id, issue);
+      }
+
+      if (matches.size >= targetMatches) {
+        break;
+      }
+    }
+
+    return [...matches.values()].sort((left, right) => right.matchScore - left.matchScore);
   }
 
   private async ensureTargetRepo(config: AppConfig): Promise<string> {
