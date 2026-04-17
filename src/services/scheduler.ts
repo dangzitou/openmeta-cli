@@ -54,7 +54,7 @@ export class SchedulerService {
       return {
         provider,
         status: 'manual',
-        detail: 'Automatic scheduling is not supported on this platform. Use your system scheduler to run OpenMeta daily in headless mode.',
+        detail: 'Automatic scheduling is not supported on this platform. Use your system scheduler to run OpenMeta agent in headless mode.',
         command: this.buildCommandString(context),
       };
     }
@@ -117,7 +117,7 @@ export class SchedulerService {
         return {
           provider: 'launchd',
           status: 'installed',
-          detail: `launchd will run OpenMeta every day at ${config.automation.scheduleTime} (${config.automation.timezone}).`,
+          detail: `launchd will run the OpenMeta agent every day at ${config.automation.scheduleTime} (${config.automation.timezone}).`,
           location: plistPath,
           command: this.buildCommandString(context),
         };
@@ -134,7 +134,7 @@ export class SchedulerService {
       return {
         provider: 'launchd',
         status: 'installed',
-        detail: `launchd will run OpenMeta every day at ${config.automation.scheduleTime} (${config.automation.timezone}).`,
+        detail: `launchd will run the OpenMeta agent every day at ${config.automation.scheduleTime} (${config.automation.timezone}).`,
         location: plistPath,
         command: this.buildCommandString(context),
       };
@@ -222,7 +222,7 @@ export class SchedulerService {
     return {
       provider: 'cron',
       status: 'installed',
-      detail: `cron will run OpenMeta every day at ${config.automation.scheduleTime} (${config.automation.timezone}).`,
+      detail: `cron will run the OpenMeta agent every day at ${config.automation.scheduleTime} (${config.automation.timezone}).`,
       command: this.buildCommandString(context),
     };
   }
@@ -340,7 +340,7 @@ export class SchedulerService {
     return [
       context.executablePath,
       context.entryScriptPath,
-      'daily',
+      'agent',
       '--headless',
       '--scheduler-run',
     ].map(value => this.shellEscape(value)).join(' ');
@@ -383,7 +383,7 @@ export class SchedulerService {
   <array>
     <string>${this.escapeXml(options.executablePath)}</string>
     <string>${this.escapeXml(options.entryScriptPath)}</string>
-    <string>daily</string>
+    <string>agent</string>
     <string>--headless</string>
     <string>--scheduler-run</string>
   </array>

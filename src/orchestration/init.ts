@@ -251,13 +251,13 @@ export class InitOrchestrator {
       },
     ]);
 
-    ui.section('Step 5 · Daily automation', 'OpenMeta can install a system scheduler so one init keeps your daily workflow running unattended.');
+    ui.section('Step 5 · Agent automation', 'OpenMeta can install a system scheduler so one init keeps your autonomous contribution agent running unattended.');
 
     const { automationEnabled } = await prompt<{ automationEnabled: boolean }>([
       {
         type: 'confirm',
         name: 'automationEnabled',
-        message: 'Enable unattended daily automation?',
+          message: 'Enable unattended agent automation?',
         default: config.automation.enabled,
       },
     ]);
@@ -281,7 +281,7 @@ export class InitOrchestrator {
       scheduleTime = scheduleResponse.scheduleTime;
 
       contentType = await selectPrompt<ContentType>({
-        message: 'Default content type for unattended runs:',
+        message: 'Default content type for legacy daily note runs:',
         default: config.automation.contentType,
         choices: [
           { name: 'Research Notes', value: 'research_note', description: 'Safer default for unattended runs.' },
@@ -341,7 +341,7 @@ export class InitOrchestrator {
     ui.banner({
       label: 'OpenMeta Init',
       title: 'Setup complete',
-      subtitle: 'Your local workspace is ready for daily issue discovery and unattended note generation.',
+      subtitle: 'Your local workspace is ready for unattended contribution scouting and artifact generation.',
       lines: [
         `GitHub account: ${username}`,
         `Model: ${selectedProvider!.name} / ${modelValue}`,
@@ -413,10 +413,10 @@ export class InitOrchestrator {
     ui.banner({
       label: 'OpenMeta Init',
       title: 'Persistent automation warning',
-      subtitle: 'When enabled, OpenMeta installs a system-level scheduled task that runs every day until you turn it off.',
+      subtitle: 'When enabled, OpenMeta installs a system-level scheduled task that runs the autonomous contribution agent every day until you turn it off.',
       lines: [
         `Current target time: ${scheduleTime} (${timezone})`,
-        'Scheduled runs use headless mode and can commit and push without interactive review.',
+        'Scheduled runs use headless agent mode and can commit and push generated artifacts without interactive review.',
         'Disable command: openmeta automation disable',
       ],
       tone: 'warning',

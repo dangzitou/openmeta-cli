@@ -9,12 +9,12 @@ export class AutomationOrchestrator {
       label: 'OpenMeta Automation',
       title: config.automation.enabled ? 'Automation enabled' : 'Automation disabled',
       subtitle: config.automation.enabled
-        ? 'A persistent system scheduler is configured for unattended daily runs.'
+        ? 'A persistent system scheduler is configured for unattended agent runs.'
         : 'No unattended scheduler is currently active.',
       lines: [
         `Scheduler: ${config.automation.scheduler}`,
         `Schedule: ${config.automation.scheduleTime} (${config.automation.timezone})`,
-        `Content type: ${config.automation.contentType}`,
+        'Workflow: autonomous contribution agent',
         'Disable command: openmeta automation disable',
       ],
       tone: config.automation.enabled ? 'warning' : 'info',
@@ -41,10 +41,10 @@ export class AutomationOrchestrator {
     ui.banner({
       label: 'OpenMeta Automation',
       title: 'Persistent automation warning',
-      subtitle: 'Enabling this installs a long-running scheduled task that will execute OpenMeta every day until disabled.',
+      subtitle: 'Enabling this installs a long-running scheduled task that will execute the OpenMeta agent every day until disabled.',
       lines: [
         `Schedule: ${config.automation.scheduleTime} (${config.automation.timezone})`,
-        'Scheduled runs use headless mode and can commit and push without interactive review.',
+        'Scheduled runs use headless agent mode and can commit and push generated artifacts without interactive review.',
         'Disable command: openmeta automation disable',
       ],
       tone: 'warning',
@@ -73,7 +73,7 @@ export class AutomationOrchestrator {
       {
         type: 'confirm',
         name: 'finalConsent',
-        message: 'Enable unattended daily automation now?',
+        message: 'Enable unattended agent automation now?',
         default: false,
       },
     ]);
@@ -117,10 +117,10 @@ export class AutomationOrchestrator {
     ui.banner({
       label: 'OpenMeta Automation',
       title: 'Disable persistent automation',
-      subtitle: 'This removes the system scheduler so OpenMeta stops running automatically.',
+      subtitle: 'This removes the system scheduler so the OpenMeta agent stops running automatically.',
       lines: [
         `Current schedule: ${config.automation.scheduleTime} (${config.automation.timezone})`,
-        'Manual runs via "openmeta daily" will still work.',
+        'Manual runs via "openmeta agent" and "openmeta daily" will still work.',
       ],
       tone: 'warning',
     });
@@ -129,7 +129,7 @@ export class AutomationOrchestrator {
       {
         type: 'confirm',
         name: 'confirmDisable',
-        message: 'Disable unattended daily automation?',
+        message: 'Disable unattended agent automation?',
         default: false,
       },
     ]);
