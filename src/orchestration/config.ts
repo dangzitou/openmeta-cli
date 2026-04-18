@@ -1,41 +1,94 @@
-import { configService, logger, prompt, ui } from '../infra/index.js';
+import { configService, prompt, ui } from '../infra/index.js';
 import { schedulerService } from '../services/index.js';
 import type { AppConfig } from '../types/index.js';
 
 export class ConfigOrchestrator {
   async view(): Promise<void> {
     const config = await configService.get();
+    const missingRequired = [
+      !config.github.username,
+      !config.github.pat,
+      !config.llm.apiKey,
+    ].filter(Boolean).length;
 
-    console.log('\n=== Current Configuration ===\n');
-    console.log(`Config Path: ${configService.getConfigPath()}\n`);
+    ui.hero({
+      label: 'OpenMeta Config',
+      title: 'Configuration snapshot',
+      subtitle: 'Review contribution profile, provider credentials, and automation posture from a single place.',
+      lines: [
+        `Config path: ${configService.getConfigPath()}`,
+        missingRequired === 0 ? 'Critical settings are present.' : `${missingRequired} critical setting group still needs attention.`,
+      ],
+      tone: missingRequired === 0 ? 'accent' : 'warning',
+    });
 
-    console.log('User Profile:');
-    console.log(`  Tech Stack: ${config.userProfile.techStack.join(', ') || '(not set)'}`);
-    console.log(`  Proficiency: ${config.userProfile.proficiency || '(not set)'}`);
-    console.log(`  Focus Areas: ${config.userProfile.focusAreas.join(', ') || '(not set)'}`);
+    ui.stats('Status overview', [
+      {
+        label: 'GitHub',
+        value: config.github.username && config.github.pat ? 'READY' : 'MISSING',
+        tone: config.github.username && config.github.pat ? 'success' : 'warning',
+      },
+      {
+        label: 'LLM',
+        value: config.llm.apiKey ? 'READY' : 'MISSING',
+        tone: config.llm.apiKey ? 'success' : 'warning',
+      },
+      {
+        label: 'Automation',
+        value: config.automation.enabled ? 'ENABLED' : 'DISABLED',
+        tone: config.automation.enabled ? 'warning' : 'muted',
+      },
+      {
+        label: 'Profile',
+        value: `${config.userProfile.techStack.length} stack item(s)`,
+        tone: config.userProfile.techStack.length > 0 ? 'info' : 'warning',
+      },
+    ]);
 
-    console.log('\nGitHub:');
-    console.log(`  Username: ${config.github.username || '(not set)'}`);
-    console.log(`  PAT: ${config.github.pat ? '***' + config.github.pat.slice(-4) : '(not set)'}`);
-    console.log(`  Target Repo: ${config.github.targetRepoPath || '(not set)'}`);
+    ui.keyValues('User profile', [
+      { label: 'Tech stack', value: config.userProfile.techStack.join(', ') || '(not set)', tone: config.userProfile.techStack.length > 0 ? 'info' : 'warning' },
+      { label: 'Proficiency', value: config.userProfile.proficiency || '(not set)', tone: config.userProfile.proficiency ? 'info' : 'warning' },
+      { label: 'Focus areas', value: config.userProfile.focusAreas.join(', ') || '(not set)', tone: config.userProfile.focusAreas.length > 0 ? 'info' : 'warning' },
+    ]);
 
-    console.log('\nLLM:');
-    console.log(`  Provider: ${config.llm.provider}`);
-    console.log(`  Base URL: ${config.llm.apiBaseUrl}`);
-    console.log(`  Model: ${config.llm.modelName}`);
-    console.log(`  API Key: ${config.llm.apiKey ? '***' + config.llm.apiKey.slice(-4) : '(not set)'}`);
+    ui.keyValues('GitHub', [
+      { label: 'Username', value: config.github.username || '(not set)', tone: config.github.username ? 'info' : 'warning' },
+      { label: 'PAT', value: ui.maskSecret(config.github.pat), tone: config.github.pat ? 'info' : 'warning' },
+      { label: 'Target repo', value: config.github.targetRepoPath || 'Auto-managed private repository', tone: 'info' },
+    ]);
 
-    console.log('\nAutomation:');
-    console.log(`  Enabled: ${config.automation.enabled}`);
-    console.log(`  Schedule Time: ${config.automation.scheduleTime}`);
-    console.log(`  Timezone: ${config.automation.timezone}`);
-    console.log(`  Content Type: ${config.automation.contentType}`);
-    console.log(`  Scheduler: ${config.automation.scheduler}`);
-    console.log(`  Min Match Score: ${config.automation.minMatchScore}`);
-    console.log(`  Skip If Already Generated Today: ${config.automation.skipIfAlreadyGeneratedToday}`);
+    ui.keyValues('LLM', [
+      { label: 'Provider', value: config.llm.provider || '(not set)', tone: config.llm.provider ? 'info' : 'warning' },
+      { label: 'Base URL', value: config.llm.apiBaseUrl || '(not set)', tone: config.llm.apiBaseUrl ? 'info' : 'warning' },
+      { label: 'Model', value: config.llm.modelName || '(not set)', tone: config.llm.modelName ? 'info' : 'warning' },
+      { label: 'API key', value: ui.maskSecret(config.llm.apiKey), tone: config.llm.apiKey ? 'info' : 'warning' },
+    ]);
 
-    console.log('\nCommit Template:');
-    console.log(`  ${config.commitTemplate}`);
+    ui.keyValues('Automation', [
+      { label: 'Enabled', value: config.automation.enabled ? 'yes' : 'no', tone: config.automation.enabled ? 'warning' : 'muted' },
+      { label: 'Schedule', value: `${config.automation.scheduleTime} (${config.automation.timezone})`, tone: 'info' },
+      { label: 'Scheduler', value: config.automation.scheduler, tone: 'info' },
+      { label: 'Content type', value: config.automation.contentType, tone: 'info' },
+      { label: 'Min match score', value: String(config.automation.minMatchScore), tone: 'info' },
+      { label: 'Skip if already generated today', value: config.automation.skipIfAlreadyGeneratedToday ? 'yes' : 'no', tone: 'info' },
+    ]);
+
+    ui.card({
+      label: 'OpenMeta Config',
+      title: 'Default commit template',
+      subtitle: 'This template is used when OpenMeta publishes contribution artifacts.',
+      lines: [config.commitTemplate],
+      tone: 'muted',
+    });
+
+    if (missingRequired > 0) {
+      ui.callout({
+        label: 'OpenMeta Config',
+        title: 'Configuration still needs attention',
+        subtitle: 'Run "openmeta init" after updating credentials so validation can confirm your GitHub and LLM connections.',
+        tone: 'warning',
+      });
+    }
   }
 
   async set(key: string, value: string): Promise<void> {
@@ -47,9 +100,13 @@ export class ConfigOrchestrator {
                        'commitTemplate'];
 
     if (!validPaths.includes(key)) {
-      logger.warn(`Unknown config key: ${key}`);
-      console.log('\nValid keys:');
-      validPaths.forEach(k => console.log(`  - ${k}`));
+      ui.callout({
+        label: 'OpenMeta Config',
+        title: 'Unknown configuration key',
+        subtitle: `OpenMeta does not recognize "${key}". Use one of the supported dotted paths below.`,
+        lines: validPaths,
+        tone: 'warning',
+      });
       return;
     }
 
@@ -126,19 +183,41 @@ export class ConfigOrchestrator {
       return;
     }
 
-    logger.success(`Updated ${key}`);
+    let schedulerDetail = 'Scheduler state unchanged.';
+    let resultTone: 'success' | 'warning' = 'success';
 
     if (key.startsWith('automation.')) {
       const syncResult = await schedulerService.sync(updated);
-      if (syncResult.status === 'installed' || syncResult.status === 'removed') {
-        logger.info(syncResult.detail);
-      } else {
-        logger.warn(syncResult.detail);
-      }
+      schedulerDetail = syncResult.detail;
+      resultTone = syncResult.status === 'failed' ? 'warning' : 'success';
     }
+
+    ui.card({
+      label: 'OpenMeta Config',
+      title: 'Configuration updated',
+      subtitle: 'The requested setting was written to local storage.',
+      lines: [
+        `Key: ${key}`,
+        `Value: ${this.describeUpdatedValue(key, updated)}`,
+        `Config path: ${configService.getConfigPath()}`,
+        `Scheduler: ${schedulerDetail}`,
+      ],
+      tone: resultTone,
+    });
   }
 
   async reset(): Promise<void> {
+    ui.callout({
+      label: 'OpenMeta Config',
+      title: 'Reset local configuration',
+      subtitle: 'This restores defaults for GitHub, LLM, profile, and automation settings stored by OpenMeta.',
+      lines: [
+        `Config file: ${configService.getConfigPath()}`,
+        'You will need to run "openmeta init" again before using authenticated workflows.',
+      ],
+      tone: 'warning',
+    });
+
     const { confirm } = await prompt<{ confirm: boolean }>([
       {
         type: 'confirm',
@@ -158,7 +237,12 @@ export class ConfigOrchestrator {
         tone: 'success',
       });
     } else {
-      logger.info('Reset cancelled');
+      ui.callout({
+        label: 'OpenMeta Config',
+        title: 'Reset cancelled',
+        subtitle: 'Existing configuration remains unchanged.',
+        tone: 'info',
+      });
     }
   }
 
@@ -174,6 +258,39 @@ export class ConfigOrchestrator {
     }
 
     throw new Error(`${key} must be a boolean value.`);
+  }
+
+  private describeUpdatedValue(key: string, config: AppConfig): string {
+    switch (key) {
+      case 'userProfile.techStack':
+        return config.userProfile.techStack.join(', ') || '(not set)';
+      case 'userProfile.proficiency':
+        return config.userProfile.proficiency;
+      case 'userProfile.focusAreas':
+        return config.userProfile.focusAreas.join(', ') || '(not set)';
+      case 'github.username':
+        return config.github.username || '(not set)';
+      case 'github.targetRepoPath':
+        return config.github.targetRepoPath || 'Auto-managed private repository';
+      case 'llm.apiBaseUrl':
+        return config.llm.apiBaseUrl;
+      case 'llm.modelName':
+        return config.llm.modelName;
+      case 'automation.enabled':
+        return config.automation.enabled ? 'yes' : 'no';
+      case 'automation.scheduleTime':
+        return config.automation.scheduleTime;
+      case 'automation.contentType':
+        return config.automation.contentType;
+      case 'automation.minMatchScore':
+        return String(config.automation.minMatchScore);
+      case 'automation.skipIfAlreadyGeneratedToday':
+        return config.automation.skipIfAlreadyGeneratedToday ? 'yes' : 'no';
+      case 'commitTemplate':
+        return config.commitTemplate;
+      default:
+        return '(updated)';
+    }
   }
 }
 

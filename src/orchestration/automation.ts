@@ -5,18 +5,56 @@ export class AutomationOrchestrator {
   async status(): Promise<void> {
     const config = await configService.get();
 
-    ui.banner({
+    ui.hero({
       label: 'OpenMeta Automation',
-      title: config.automation.enabled ? 'Automation enabled' : 'Automation disabled',
+      title: config.automation.enabled ? 'Unattended contribution loop is armed' : 'Unattended contribution loop is idle',
       subtitle: config.automation.enabled
-        ? 'A persistent system scheduler is configured for unattended agent runs.'
-        : 'No unattended scheduler is currently active.',
+        ? 'A persistent system scheduler is configured for headless agent runs.'
+        : 'No unattended scheduler is currently active. Manual runs remain available at any time.',
       lines: [
-        `Scheduler: ${config.automation.scheduler}`,
         `Schedule: ${config.automation.scheduleTime} (${config.automation.timezone})`,
-        'Workflow: autonomous contribution agent',
-        'Disable command: openmeta automation disable',
+        `Scheduler provider: ${config.automation.scheduler}`,
       ],
+      tone: config.automation.enabled ? 'warning' : 'accent',
+    });
+
+    ui.stats('Automation snapshot', [
+      {
+        label: 'Status',
+        value: config.automation.enabled ? 'ENABLED' : 'DISABLED',
+        tone: config.automation.enabled ? 'warning' : 'muted',
+      },
+      {
+        label: 'Mode',
+        value: 'HEADLESS',
+        tone: 'info',
+      },
+      {
+        label: 'Content type',
+        value: config.automation.contentType.toUpperCase(),
+        tone: 'info',
+      },
+      {
+        label: 'Min score',
+        value: String(config.automation.minMatchScore),
+        tone: 'accent',
+      },
+    ]);
+
+    ui.keyValues('Runtime policy', [
+      { label: 'Schedule', value: `${config.automation.scheduleTime} (${config.automation.timezone})`, tone: 'info' },
+      { label: 'Scheduler', value: config.automation.scheduler, tone: 'info' },
+      { label: 'Headless agent', value: 'yes', tone: 'warning' },
+      { label: 'Skip if already generated today', value: config.automation.skipIfAlreadyGeneratedToday ? 'yes' : 'no', tone: 'info' },
+      { label: 'Disable command', value: 'openmeta automation disable', tone: 'muted' },
+    ]);
+
+    ui.callout({
+      label: 'OpenMeta Automation',
+      title: config.automation.enabled ? 'Review automation risk posture' : 'Automation is currently manual-only',
+      subtitle: config.automation.enabled
+        ? 'Scheduled runs can publish generated artifacts and may open a real draft PR without an extra interactive review step.'
+        : 'Enable automation only if you are comfortable letting OpenMeta run the contribution loop unattended on your machine.',
       tone: config.automation.enabled ? 'warning' : 'info',
     });
   }
@@ -25,10 +63,10 @@ export class AutomationOrchestrator {
     const config = await configService.get();
 
     if (config.automation.enabled) {
-      ui.banner({
+      ui.callout({
         label: 'OpenMeta Automation',
         title: 'Automation already enabled',
-        subtitle: 'The persistent scheduler is already configured.',
+        subtitle: 'The persistent scheduler is already configured for unattended runs.',
         lines: [
           `Schedule: ${config.automation.scheduleTime} (${config.automation.timezone})`,
           'Disable command: openmeta automation disable',
@@ -38,7 +76,7 @@ export class AutomationOrchestrator {
       return;
     }
 
-    ui.banner({
+    ui.callout({
       label: 'OpenMeta Automation',
       title: 'Persistent automation warning',
       subtitle: 'Enabling this installs a long-running scheduled task that will execute the OpenMeta agent every day until disabled.',
@@ -50,6 +88,13 @@ export class AutomationOrchestrator {
       tone: 'warning',
     });
 
+    ui.keyValues('Impact summary', [
+      { label: 'Execution mode', value: 'Headless autonomous agent', tone: 'warning' },
+      { label: 'Review gate', value: 'No interactive review during scheduled runs', tone: 'warning' },
+      { label: 'Publish behavior', value: 'Artifacts may be committed and pushed automatically', tone: 'warning' },
+      { label: 'Rollback', value: 'Run "openmeta automation disable"', tone: 'info' },
+    ]);
+
     const { acknowledgePersistence } = await prompt<{ acknowledgePersistence: boolean }>([
       {
         type: 'confirm',
@@ -60,7 +105,7 @@ export class AutomationOrchestrator {
     ]);
 
     if (!acknowledgePersistence) {
-      ui.banner({
+      ui.callout({
         label: 'OpenMeta Automation',
         title: 'Automation not enabled',
         subtitle: 'The persistent scheduler was not installed.',
@@ -79,7 +124,7 @@ export class AutomationOrchestrator {
     ]);
 
     if (!finalConsent) {
-      ui.banner({
+      ui.callout({
         label: 'OpenMeta Automation',
         title: 'Automation not enabled',
         subtitle: 'The persistent scheduler was not installed.',
@@ -99,12 +144,14 @@ export class AutomationOrchestrator {
     await configService.save(updated);
     const result = await schedulerService.sync(updated);
 
-    ui.banner({
+    ui.card({
       label: 'OpenMeta Automation',
       title: result.status === 'installed' ? 'Automation enabled' : 'Automation needs attention',
       subtitle: result.detail,
       lines: [
         `Schedule: ${updated.automation.scheduleTime} (${updated.automation.timezone})`,
+        `Scheduler: ${updated.automation.scheduler}`,
+        `Content type: ${updated.automation.contentType}`,
         'Disable command: openmeta automation disable',
       ],
       tone: result.status === 'installed' ? 'success' : 'warning',
@@ -114,7 +161,7 @@ export class AutomationOrchestrator {
   async disable(): Promise<void> {
     const config = await configService.get();
 
-    ui.banner({
+    ui.callout({
       label: 'OpenMeta Automation',
       title: 'Disable persistent automation',
       subtitle: 'This removes the system scheduler so the OpenMeta agent stops running automatically.',
@@ -135,7 +182,7 @@ export class AutomationOrchestrator {
     ]);
 
     if (!confirmDisable) {
-      ui.banner({
+      ui.callout({
         label: 'OpenMeta Automation',
         title: 'Automation unchanged',
         subtitle: 'The persistent scheduler is still in its previous state.',
@@ -155,11 +202,14 @@ export class AutomationOrchestrator {
     await configService.save(updated);
     const result = await schedulerService.sync(updated);
 
-    ui.banner({
+    ui.card({
       label: 'OpenMeta Automation',
       title: result.status === 'removed' ? 'Automation disabled' : 'Automation disable needs attention',
       subtitle: result.detail,
-      lines: ['You can re-enable it later with "openmeta automation enable".'],
+      lines: [
+        `Scheduler: ${updated.automation.scheduler}`,
+        'You can re-enable it later with "openmeta automation enable".',
+      ],
       tone: result.status === 'removed' ? 'success' : 'warning',
     });
   }
