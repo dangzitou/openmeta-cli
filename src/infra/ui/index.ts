@@ -2,6 +2,7 @@ import * as p from '@clack/prompts';
 import boxen from 'boxen';
 import chalk from 'chalk';
 import figures from 'figures';
+import { getOpenMetaWordmarkLines } from './brand.js';
 import { getUiCapabilities } from './capabilities.js';
 import { padLine, visibleLength, wrapLine } from './layout.js';
 import { runTask } from './live.js';
@@ -121,14 +122,9 @@ function renderPrefixedLines(
   return wrapped.map((line, index) => `${index === 0 ? prefix : continuationPrefix}${line}`);
 }
 
-function renderBrandMark(capabilities: UiCapabilities): string {
-  const lines = [
-    '  ____   ____  ______ _   __ __  __ ______ ______ ______',
-    ' / __ \\ / __ \\/ ____// | / //  |/ // ____//_  __// ____/',
-    '/ / / // /_/ / __/  /  |/ // /|_/ // __/    / /  / __/   ',
-    '/ /_/ // ____/ /___ / /|  // /  / // /___   / /  / /___   ',
-    '\\____//_/   /_____//_/ |_//_/  /_//_____/  /_/  /_____/   ',
-  ];
+function renderBrandMark(capabilities: UiCapabilities, tone: Tone = 'accent'): string[] {
+  const lines = getOpenMetaWordmarkLines();
+  const palette = paletteForTone(tone);
 
   return lines.map((line, index) => {
     if (!capabilities.supportsColor) {
@@ -139,8 +135,8 @@ function renderBrandMark(capabilities: UiCapabilities): string {
       return chalk.whiteBright.bold(line);
     }
 
-    return chalk.cyanBright.bold(line);
-  }).join('\n');
+    return palette.accent.bold(line);
+  });
 }
 
 function renderRule(capabilities: UiCapabilities, tone: Tone, width: number): string {
@@ -205,7 +201,7 @@ function printHero(capabilities: UiCapabilities, options: CardOptions): void {
   const palette = paletteForTone(tone);
 
   printBlankLine();
-  clackLines(renderBrandMark(capabilities).split('\n'));
+  clackLines(renderBrandMark(capabilities, tone));
   clackLines(palette.accent(options.title));
 
   if (options.subtitle) {
@@ -235,7 +231,7 @@ function printCelebration(capabilities: UiCapabilities, options: CardOptions): v
 
   printBlankLine();
   clackLines(chalk.gray(rule));
-  clackLines(renderBrandMark(capabilities).split('\n').slice(1, 4).map((line) => chalk.whiteBright(line)));
+  clackLines(renderBrandMark(capabilities, tone));
   if (options.subtitle) {
     clackLines(wrapLine(options.subtitle, width).map((line) => chalk.gray(line)));
   }
