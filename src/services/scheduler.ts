@@ -348,13 +348,16 @@ export class SchedulerService {
 
   private parseScheduleTime(value: string): { hour: number; minute: number } {
     const match = value.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
-    if (!match) {
+    const hourValue = match?.[1];
+    const minuteValue = match?.[2];
+
+    if (!hourValue || !minuteValue) {
       throw new Error(`Invalid schedule time "${value}". Expected HH:mm.`);
     }
 
     return {
-      hour: Number.parseInt(match[1], 10),
-      minute: Number.parseInt(match[2], 10),
+      hour: Number.parseInt(hourValue, 10),
+      minute: Number.parseInt(minuteValue, 10),
     };
   }
 

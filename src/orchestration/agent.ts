@@ -893,13 +893,16 @@ export class AgentOrchestrator {
 
   private parseGitHubRepository(remoteUrl: string): { owner: string; repo: string } {
     const sshMatch = remoteUrl.match(/github\.com[:/](.+?)\/(.+?)(?:\.git)?$/);
-    if (!sshMatch) {
+    const owner = sshMatch?.[1];
+    const repo = sshMatch?.[2];
+
+    if (!owner || !repo) {
       throw new Error(`Unable to parse GitHub repository from remote URL: ${remoteUrl}`);
     }
 
     return {
-      owner: sshMatch[1],
-      repo: sshMatch[2],
+      owner,
+      repo,
     };
   }
 
@@ -1126,10 +1129,11 @@ export class AgentOrchestrator {
       state: 'open',
     });
 
-    if (existing.data.length > 0) {
+    const [existingPullRequest] = existing.data;
+    if (existingPullRequest) {
       return {
-        url: existing.data[0].html_url,
-        number: existing.data[0].number,
+        url: existingPullRequest.html_url,
+        number: existingPullRequest.number,
       };
     }
 

@@ -10,7 +10,9 @@
   "scripts": {
     "build": "bun build --target=bun --outfile=bin/openmeta.js ./src/cli.ts",
     "dev": "bun run ./src/cli.ts",
-    "start": "bun run ./src/cli.ts"
+    "start": "bun run ./src/cli.ts",
+    "typecheck": "bunx tsc --noEmit",
+    "test": "bun test"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -5,8 +5,13 @@ import type { AppConfig } from '../types/index.js';
 import { CryptoService } from './crypto.js';
 import { logger } from './logger.js';
 
-const CONFIG_DIR = join(homedir(), '.config', 'openmeta');
-const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
+function getConfigDirPath(): string {
+  return process.env.OPENMETA_CONFIG_DIR || join(homedir(), '.config', 'openmeta');
+}
+
+function getConfigFilePath(): string {
+  return join(getConfigDirPath(), 'config.json');
+}
 
 function getDefaultSchedulerProvider(): AppConfig['automation']['scheduler'] {
   if (process.platform === 'darwin') {
@@ -55,19 +60,21 @@ export class ConfigService {
   private config: AppConfig | null = null;
 
   async load(): Promise<AppConfig> {
+    const configFilePath = getConfigFilePath();
+
     if (this.config) {
       return this.config;
     }
 
-    if (existsSync(CONFIG_FILE)) {
+    if (existsSync(configFilePath)) {
       try {
-        const fileContent = readFileSync(CONFIG_FILE, 'utf-8');
+        const fileContent = readFileSync(configFilePath, 'utf-8');
         const parsedConfig = JSON.parse(fileContent) as Partial<AppConfig>;
         this.config = this.normalizeConfig(this.decryptConfig(parsedConfig));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        logger.error(`Failed to load config from ${CONFIG_FILE}: ${message}`);
-        throw new Error(`Unable to load OpenMeta configuration. See ${CONFIG_FILE} for details.`);
+        logger.error(`Failed to load config from ${configFilePath}: ${message}`);
+        throw new Error(`Unable to load OpenMeta configuration. See ${configFilePath} for details.`);
       }
     } else {
       this.config = createDefaultConfig();
@@ -77,12 +84,15 @@ export class ConfigService {
   }
 
   async save(config: AppConfig): Promise<void> {
-    if (!existsSync(CONFIG_DIR)) {
-      mkdirSync(CONFIG_DIR, { recursive: true });
+    const configDirPath = getConfigDirPath();
+    const configFilePath = getConfigFilePath();
+
+    if (!existsSync(configDirPath)) {
+      mkdirSync(configDirPath, { recursive: true });
     }
 
     const encryptedConfig = this.encryptConfig(config);
-    writeFileSync(CONFIG_FILE, JSON.stringify(encryptedConfig, null, 2), 'utf-8');
+    writeFileSync(configFilePath, JSON.stringify(encryptedConfig, null, 2), 'utf-8');
     this.config = config;
     logger.success('Configuration saved successfully');
   }
@@ -102,9 +112,11 @@ export class ConfigService {
   }
 
   async reset(): Promise<void> {
-    if (existsSync(CONFIG_FILE)) {
-      const backupPath = `${CONFIG_FILE}.backup`;
-      const currentContent = readFileSync(CONFIG_FILE, 'utf-8');
+    const configFilePath = getConfigFilePath();
+
+    if (existsSync(configFilePath)) {
+      const backupPath = `${configFilePath}.backup`;
+      const currentContent = readFileSync(configFilePath, 'utf-8');
       writeFileSync(backupPath, currentContent, 'utf-8');
       logger.info(`Backup created at ${backupPath}`);
     }
@@ -135,7 +147,7 @@ export class ConfigService {
   }
 
   getConfigPath(): string {
-    return CONFIG_FILE;
+    return getConfigFilePath();
   }
 
   private normalizeConfig(config: Partial<AppConfig>): AppConfig {
