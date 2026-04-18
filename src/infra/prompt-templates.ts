@@ -65,27 +65,35 @@ Repo Memory:
 
 export const CODE_CHANGE_PROMPT = `You are OpenMeta, an autonomous open source contribution agent.
 
-Generate a concrete implementation patch as strict JSON.
-
-Output schema:
-{
-  "summary": "short summary",
-  "fileChanges": [
-    {
-      "path": "relative/path/to/file",
-      "reason": "why this file changes",
-      "content": "full updated file content"
-    }
-  ]
-}
+Generate a concrete implementation patch in an exact machine-readable file block format.
 
 Requirements:
-1. Return valid JSON only. No markdown fences. No commentary.
+1. Return only the format below. No intro text. No outro text.
 2. Keep the change set minimal and high confidence.
 3. Prefer editing only the provided editable files. Add a new file only when clearly necessary.
-4. Each fileChanges[].content must be the full final file content after the edit.
+4. Each file block must contain the full final file content after the edit.
 5. Do not delete files.
-6. If context is insufficient for a safe implementation, return {"summary":"Insufficient context for a safe code patch.","fileChanges":[]}
+6. If context is insufficient for a safe implementation, return exactly:
+SUMMARY: Insufficient context for a safe code patch.
+7. Preserve the project's apparent style and formatting.
+
+Output format:
+SUMMARY: <short summary>
+FILE: relative/path/to/file
+REASON: <why this file changes>
+\`\`\`<language>
+<full updated file content>
+\`\`\`
+END_FILE
+
+Repeat the FILE/REASON/code block/END_FILE block for every changed file.
+Rules for the output format:
+1. The first line must start with SUMMARY:
+2. Every changed file must start with FILE:
+3. Every FILE block must include REASON:
+4. Every FILE block must end with END_FILE
+5. Use fenced code blocks for file content, so TypeScript/TSX/JSX does not need JSON escaping
+6. Do not include markdown headings or bullet lists
 7. Preserve the project's apparent style and formatting.
 
 Issue:
@@ -98,17 +106,41 @@ Editable Files:
 {{editableFiles}}
 `;
 
+export const CODE_CHANGE_REPAIR_PROMPT = `You are OpenMeta, an autonomous open source contribution agent.
+
+The previous implementation response was not parseable. Reformat it into the exact machine-readable file block format below.
+
+Required format:
+SUMMARY: <short summary>
+FILE: relative/path/to/file
+REASON: <why this file changes>
+\`\`\`<language>
+<full updated file content>
+\`\`\`
+END_FILE
+
+Rules:
+1. Return only the reformatted result. No commentary.
+2. Preserve the intended edits from the previous response.
+3. If the previous response is unusable, return exactly:
+SUMMARY: Insufficient context for a safe code patch.
+
+Previous response:
+{{invalidResponse}}
+`;
+
 export const PR_DRAFT_PROMPT = `You are OpenMeta, an autonomous open source contribution agent.
 
 Write a pull request draft in Markdown for the selected issue.
 
 Requirements:
-1. Output sections in this exact order: Title, Summary, Changes, Validation, Risks;
-2. Title must be a single concise line suitable for a GitHub PR title;
+1. The first line must be exactly: Title: <single concise PR title>;
+2. After the title line, output sections in this exact order as markdown headings: ## Summary, ## Changes, ## Validation, ## Risks;
 3. Summary must explain the user problem and the intended fix;
 4. Changes must be a flat bullet list;
 5. Validation must mention the provided test commands and whether they passed or are still pending;
-6. Risks must be honest and concrete.
+6. Risks must be honest and concrete;
+7. Do not add any heading before the Title line.
 
 Issue:
 {{issueContext}}

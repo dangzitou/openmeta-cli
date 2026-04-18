@@ -573,7 +573,10 @@ export class AgentOrchestrator {
     }
 
     const hasValidationFailures = input.validationResults.some((result) => !result.passed);
-    if (input.headless && hasValidationFailures) {
+    const hasBlockingValidationFailures = input.validationResults.some(
+      (result) => !result.passed && !this.isInfrastructureValidationFailure(result),
+    );
+    if (input.headless && hasBlockingValidationFailures) {
       logger.warn('Skipping real draft PR creation because validation failed in headless mode.');
       return {
         changedFiles: input.changedFiles,
@@ -748,7 +751,24 @@ export class AgentOrchestrator {
       return 'not executed';
     }
 
-    return results.map((result) => `${result.command}=${result.passed ? 'passed' : `failed (${result.exitCode ?? 'n/a'})`}`).join('; ');
+    return results.map((result) => {
+      if (result.passed) {
+        return `${result.command}=passed`;
+      }
+
+      if (this.isInfrastructureValidationFailure(result)) {
+        return `${result.command}=unavailable (${result.exitCode ?? 'n/a'})`;
+      }
+
+      return `${result.command}=failed (${result.exitCode ?? 'n/a'})`;
+    }).join('; ');
+  }
+
+  private isInfrastructureValidationFailure(result: TestResult): boolean {
+    const output = result.output.toLowerCase();
+    return result.exitCode === 127 ||
+      output.includes('command not found') ||
+      output.includes('not recognized as an internal or external command');
   }
 
   private showResult(result: ContributionAgentResult): void {
@@ -921,24 +941,39 @@ export class AgentOrchestrator {
   }
 
   private parseDraftPullRequest(prDraft: string, issue: RankedIssue): DraftPullRequest {
-    const lines = prDraft.split('\n');
-    const titleLine = lines.find((line) => /^title\s*:/i.test(line.trim()));
-    const headingTitle = lines.find((line) => line.trim().startsWith('#'));
-    const title = titleLine
-      ? titleLine.replace(/^title\s*:/i, '').trim()
-      : headingTitle
-        ? headingTitle.replace(/^#+\s*/, '').trim()
-        : `Draft contribution for ${issue.repoFullName}#${issue.number}`;
-
-    const body = prDraft.trim().length > 0
-      ? prDraft.trim()
+    const title = this.extractPullRequestTitle(prDraft) || `Draft contribution for ${issue.repoFullName}#${issue.number}`;
+    const body = this.stripTitleSection(prDraft).trim().length > 0
+      ? this.stripTitleSection(prDraft).trim()
       : [
-        'Summary',
+        '## Summary',
         '',
         `Draft contribution artifacts for ${issue.repoFullName}#${issue.number}.`,
       ].join('\n');
 
     return { title, body };
+  }
+
+  private extractPullRequestTitle(prDraft: string): string | null {
+    const titleLine = prDraft.match(/^Title:\s*(.+)$/im);
+    if (titleLine?.[1]) {
+      return titleLine[1].trim();
+    }
+
+    const titleSection = prDraft.match(/^(?:#{1,6}\s*)?Title\s*$\n+([^\n#][^\n]*)/im);
+    if (titleSection?.[1]) {
+      return titleSection[1].trim();
+    }
+
+    return null;
+  }
+
+  private stripTitleSection(prDraft: string): string {
+    let normalized = prDraft.trim();
+
+    normalized = normalized.replace(/^Title:\s*.+\n*/im, '').trim();
+    normalized = normalized.replace(/^(?:#{1,6}\s*)?Title\s*$\n+[^\n]*\n*/im, '').trim();
+
+    return normalized;
   }
 
   private async getUpstreamRepositoryContext(issue: RankedIssue): Promise<TargetRepoContext> {

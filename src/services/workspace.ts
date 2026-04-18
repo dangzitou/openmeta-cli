@@ -24,6 +24,7 @@ const EXCLUDED_DIRS = new Set([
 ]);
 
 const MAX_DISCOVERED_FILES = 250;
+const MAX_SNIPPET_CHARS = 8000;
 
 function sanitizeRepoName(repoFullName: string): string {
   return repoFullName.replace(/\//g, '__');
@@ -187,16 +188,17 @@ export class WorkspaceService {
   }
 
   private rankCandidateFiles(issue: RankedIssue, memory: RepoMemory, files: string[]): string[] {
+    const referencedPaths = this.extractReferencedPaths(`${issue.title}\n${issue.body}`);
     const keywords = `${issue.title} ${issue.analysis.coreDemand} ${issue.analysis.techRequirements.join(' ')}`
       .toLowerCase()
       .split(/[^a-z0-9]+/)
       .filter((token) => token.length >= 3);
 
     return [...files]
-      .sort((left, right) => this.scorePath(right, keywords, memory) - this.scorePath(left, keywords, memory));
+      .sort((left, right) => this.scorePath(right, keywords, memory, referencedPaths) - this.scorePath(left, keywords, memory, referencedPaths));
   }
 
-  private scorePath(path: string, keywords: string[], memory: RepoMemory): number {
+  private scorePath(path: string, keywords: string[], memory: RepoMemory, referencedPaths: string[]): number {
     let score = 0;
     const lowerPath = path.toLowerCase();
 
@@ -208,6 +210,18 @@ export class WorkspaceService {
 
     if (memory.preferredPaths.some((candidate) => candidate === path)) {
       score += 12;
+    }
+
+    for (const referencedPath of referencedPaths) {
+      const lowerReferencedPath = referencedPath.toLowerCase();
+      if (lowerPath.endsWith(lowerReferencedPath)) {
+        score += 48;
+        break;
+      }
+
+      if (lowerPath.includes(lowerReferencedPath) || basename(lowerPath) === basename(lowerReferencedPath)) {
+        score += 24;
+      }
     }
 
     const fileName = basename(path).toLowerCase();
@@ -225,10 +239,19 @@ export class WorkspaceService {
   private readSnippet(path: string): string {
     try {
       const content = readFileSync(path, 'utf-8');
-      return content.slice(0, 3000);
+      return content.slice(0, MAX_SNIPPET_CHARS);
     } catch {
       return '';
     }
+  }
+
+  private extractReferencedPaths(content: string): string[] {
+    const matches = content.matchAll(/(?:^|[\s`'"])((?:[\w.-]+\/)+[\w.-]+\.(?:ts|tsx|js|jsx|py|go|rs|java|kt|json|md|css|scss))/gm);
+    return [...new Set(
+      [...matches]
+        .map((match) => match[1]?.trim())
+        .filter((value): value is string => Boolean(value)),
+    )];
   }
 
   private detectTestCommands(workspacePath: string): TestCommand[] {
@@ -241,13 +264,17 @@ export class WorkspaceService {
 
     if (existsSync(packageJsonPath)) {
       try {
-        const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { scripts?: Record<string, string> };
+        const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as {
+          scripts?: Record<string, string>;
+          packageManager?: string;
+        };
         const scripts = packageJson.scripts ?? {};
+        const scriptRunner = this.detectPackageScriptRunner(workspacePath, packageJson.packageManager);
 
-        if (scripts['test']) commands.push({ command: 'npm test -- --runInBand', reason: 'Detected package.json test script' });
-        if (scripts['lint']) commands.push({ command: 'npm run lint', reason: 'Detected package.json lint script' });
-        if (scripts['typecheck']) commands.push({ command: 'npm run typecheck', reason: 'Detected package.json typecheck script' });
-        if (scripts['build']) commands.push({ command: 'npm run build', reason: 'Detected package.json build script' });
+        if (scripts['test']) commands.push({ command: this.buildPackageScriptCommand(scriptRunner, 'test'), reason: `Detected package.json test script (${scriptRunner})` });
+        if (scripts['lint']) commands.push({ command: this.buildPackageScriptCommand(scriptRunner, 'lint'), reason: `Detected package.json lint script (${scriptRunner})` });
+        if (scripts['typecheck']) commands.push({ command: this.buildPackageScriptCommand(scriptRunner, 'typecheck'), reason: `Detected package.json typecheck script (${scriptRunner})` });
+        if (scripts['build']) commands.push({ command: this.buildPackageScriptCommand(scriptRunner, 'build'), reason: `Detected package.json build script (${scriptRunner})` });
       } catch (error) {
         logger.debug('Unable to parse package.json for test command detection', error);
       }
@@ -270,6 +297,51 @@ export class WorkspaceService {
     }
 
     return commands.filter((item, index, list) => list.findIndex((candidate) => candidate.command === item.command) === index);
+  }
+
+  private detectPackageScriptRunner(workspacePath: string, packageManager?: string): 'bun' | 'pnpm' | 'yarn' | 'npm' {
+    const normalizedPackageManager = packageManager?.toLowerCase();
+    if (normalizedPackageManager?.startsWith('bun@')) {
+      return 'bun';
+    }
+
+    if (normalizedPackageManager?.startsWith('pnpm@')) {
+      return 'pnpm';
+    }
+
+    if (normalizedPackageManager?.startsWith('yarn@')) {
+      return 'yarn';
+    }
+
+    if (normalizedPackageManager?.startsWith('npm@')) {
+      return 'npm';
+    }
+
+    if (existsSync(join(workspacePath, 'bun.lock')) || existsSync(join(workspacePath, 'bun.lockb'))) {
+      return 'bun';
+    }
+
+    if (existsSync(join(workspacePath, 'pnpm-lock.yaml'))) {
+      return 'pnpm';
+    }
+
+    if (existsSync(join(workspacePath, 'yarn.lock'))) {
+      return 'yarn';
+    }
+
+    if (existsSync(join(workspacePath, 'package-lock.json'))) {
+      return 'npm';
+    }
+
+    return 'bun';
+  }
+
+  private buildPackageScriptCommand(runner: 'bun' | 'pnpm' | 'yarn' | 'npm', scriptName: string): string {
+    if (runner === 'yarn') {
+      return `yarn ${scriptName}`;
+    }
+
+    return `${runner} run ${scriptName}`;
   }
 
   private runTestCommands(workspacePath: string, commands: TestCommand[]): TestResult[] {

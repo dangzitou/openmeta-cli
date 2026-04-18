@@ -72,3 +72,47 @@ describe('workspaceService.applyGeneratedChanges', () => {
     expect(changedFiles).toEqual([]);
   });
 });
+
+describe('workspaceService.detectTestCommands', () => {
+  test('prefers bun for package scripts when a bun lockfile is present', () => {
+    const workspacePath = makeWorkspace();
+    writeFileSync(join(workspacePath, 'package.json'), JSON.stringify({
+      scripts: {
+        lint: 'eslint .',
+        build: 'vite build',
+      },
+    }), 'utf-8');
+    writeFileSync(join(workspacePath, 'bun.lock'), '', 'utf-8');
+
+    const commands = (workspaceService as unknown as {
+      detectTestCommands(path: string): Array<{ command: string }>;
+    }).detectTestCommands(workspacePath);
+
+    expect(commands.map((command) => command.command)).toContain('bun run lint');
+    expect(commands.map((command) => command.command)).toContain('bun run build');
+  });
+
+  test('prioritizes file paths explicitly referenced in the issue body', () => {
+    const workspacePath = makeWorkspace();
+    mkdirSync(join(workspacePath, 'src', 'components'), { recursive: true });
+    writeFileSync(join(workspacePath, 'src', 'components', 'Dropzone.tsx'), 'export const Dropzone = () => null;\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'src', 'misc.ts'), 'export const misc = true;\n', 'utf-8');
+
+    const rankedFiles = (workspaceService as unknown as {
+      rankCandidateFiles: (
+        issue: { title: string; body: string; analysis: { coreDemand: string; techRequirements: string[] } },
+        memory: { preferredPaths: string[] },
+        files: string[],
+      ) => string[];
+    }).rankCandidateFiles({
+      title: 'Fix accessibility in Dropzone',
+      body: 'The problem is in `src/components/Dropzone.tsx` and should be fixed there.',
+      analysis: {
+        coreDemand: 'Add accessibility attributes to the dropzone.',
+        techRequirements: ['react', 'typescript'],
+      },
+    }, { preferredPaths: [] }, ['src/misc.ts', 'src/components/Dropzone.tsx']);
+
+    expect(rankedFiles[0]).toBe('src/components/Dropzone.tsx');
+  });
+});

@@ -11,6 +11,7 @@ import type {
 import { logger } from '../infra/logger.js';
 import {
   CODE_CHANGE_PROMPT,
+  CODE_CHANGE_REPAIR_PROMPT,
   fillPrompt,
   ISSUE_MATCH_PROMPT,
   DAILY_REPORT_GENERATE_PROMPT,
@@ -136,8 +137,19 @@ Repo Stars: ${i.repoStars}`
       editableFiles,
     });
 
-    const content = await this.chat(prompt, { temperature: 0.2 });
-    return this.parseImplementationDraft(content);
+    const content = await this.chat(prompt, { temperature: 0.1 });
+
+    try {
+      return this.parseImplementationDraft(content);
+    } catch (error) {
+      logger.debug('Primary implementation draft parsing failed, attempting repair', error);
+
+      const repairPrompt = fillPrompt(CODE_CHANGE_REPAIR_PROMPT, {
+        invalidResponse: content.slice(0, 12000),
+      });
+      const repairedContent = await this.chat(repairPrompt, { temperature: 0 });
+      return this.parseImplementationDraft(repairedContent);
+    }
   }
 
   async generatePrDraft(
@@ -230,20 +242,75 @@ Repo Stars: ${i.repoStars}`
   }
 
   private parseImplementationDraft(content: string): ImplementationDraft {
-    const payload = this.extractJsonObject(content);
-    const parsed = JSON.parse(payload) as Partial<ImplementationDraft>;
+    const jsonDraft = this.tryParseImplementationJson(content);
+    if (jsonDraft) {
+      return jsonDraft;
+    }
+
+    const blockDraft = this.tryParseImplementationBlocks(content);
+    if (blockDraft.summary || blockDraft.fileChanges.length > 0) {
+      return blockDraft;
+    }
+
+    throw new Error('LLM did not return a parseable implementation draft.');
+  }
+
+  private tryParseImplementationJson(content: string): ImplementationDraft | null {
+    try {
+      const payload = this.extractJsonObject(content);
+      const parsed = JSON.parse(payload) as Partial<ImplementationDraft>;
+      return this.normalizeImplementationDraft(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  private tryParseImplementationBlocks(content: string): ImplementationDraft {
+    const normalized = content.replace(/\r\n/g, '\n').trim();
+    const summaryMatch = normalized.match(/^SUMMARY:\s*(.+)$/im);
+    const blockPattern = /^\s*FILE:\s*([^\n]+)\n\s*REASON:\s*([^\n]*)\n\s*```[^\n]*\n([\s\S]*?)\n\s*```\n\s*END_FILE/gim;
+    const fileChanges: ImplementationDraft['fileChanges'] = [];
+
+    for (const match of normalized.matchAll(blockPattern)) {
+      const [, path = '', reason = '', fileContent = ''] = match;
+      const trimmedPath = path.trim();
+      const trimmedContent = fileContent;
+
+      if (!trimmedPath || !trimmedContent) {
+        continue;
+      }
+
+      fileChanges.push({
+        path: trimmedPath,
+        reason: reason.trim(),
+        content: trimmedContent,
+      });
+    }
 
     return {
-      summary: typeof parsed.summary === 'string' ? parsed.summary.trim() : '',
-      fileChanges: Array.isArray(parsed.fileChanges)
-        ? parsed.fileChanges
-          .map((item) => ({
-            path: typeof item?.path === 'string' ? item.path.trim() : '',
-            reason: typeof item?.reason === 'string' ? item.reason.trim() : '',
-            content: typeof item?.content === 'string' ? item.content : '',
-          }))
-          .filter((item) => item.path.length > 0 && item.content.length > 0)
-        : [],
+      summary: summaryMatch?.[1]?.trim() || '',
+      fileChanges,
+    };
+  }
+
+  private normalizeImplementationDraft(draft: Partial<ImplementationDraft>): ImplementationDraft {
+    const normalizedFileChanges = Array.isArray(draft.fileChanges)
+      ? draft.fileChanges
+        .map((item) => ({
+          path: typeof item?.path === 'string' ? item.path.trim() : '',
+          reason: typeof item?.reason === 'string' ? item.reason.trim() : '',
+          content: typeof item?.content === 'string' ? item.content : '',
+        }))
+        .filter((item) => item.path.length > 0 && item.content.length > 0)
+      : [];
+
+    const dedupedFileChanges = [...new Map(
+      normalizedFileChanges.map((item) => [item.path, item]),
+    ).values()];
+
+    return {
+      summary: typeof draft.summary === 'string' ? draft.summary.trim() : '',
+      fileChanges: dedupedFileChanges,
     };
   }
 

@@ -52,4 +52,24 @@ describe('LLMService implementation draft parsing', () => {
     expect(draft.fileChanges).toHaveLength(1);
     expect(draft.fileChanges[0]?.reason).toBe('Valid');
   });
+
+  test('parses file block responses with raw tsx content', () => {
+    const service = new LLMService() as unknown as LLMServiceInternals;
+    const draft = service.parseImplementationDraft(`
+      SUMMARY: Add aria-label support
+      FILE: src/components/IconButton.tsx
+      REASON: Add accessible label handling for icon-only buttons
+      \`\`\`tsx
+      export function IconButton() {
+        return <button aria-label="Open menu" />;
+      }
+      \`\`\`
+      END_FILE
+    `);
+
+    expect(draft.summary).toBe('Add aria-label support');
+    expect(draft.fileChanges).toHaveLength(1);
+    expect(draft.fileChanges[0]?.path).toBe('src/components/IconButton.tsx');
+    expect(draft.fileChanges[0]?.content).toContain('aria-label="Open menu"');
+  });
 });
