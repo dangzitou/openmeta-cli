@@ -1,4 +1,3 @@
-import chalk from 'chalk';
 import { existsSync } from 'fs';
 import type { AppConfig } from '../types/index.js';
 import type { UserProficiency } from '../types/config.types.js';
@@ -67,9 +66,39 @@ const FOCUS_AREA_CHOICES = [
   { name: 'Open Source', value: 'open-source' },
 ];
 
+type SetupStepId = 'github' | 'llm' | 'profile' | 'targetRepo' | 'automation';
+
+const SETUP_STEPS: Array<{ id: SetupStepId; label: string; description: string }> = [
+  {
+    id: 'github',
+    label: 'GitHub access',
+    description: 'Verify repository discovery credentials.',
+  },
+  {
+    id: 'llm',
+    label: 'LLM provider',
+    description: 'Connect the model used for ranking and draft generation.',
+  },
+  {
+    id: 'profile',
+    label: 'Matching profile',
+    description: 'Capture stack, proficiency, and focus areas for issue scoring.',
+  },
+  {
+    id: 'targetRepo',
+    label: 'Target repository',
+    description: 'Choose where OpenMeta publishes contribution artifacts.',
+  },
+  {
+    id: 'automation',
+    label: 'Automation policy',
+    description: 'Define whether the autonomous loop should run unattended.',
+  },
+];
+
 export class InitOrchestrator {
   async execute(): Promise<void> {
-    ui.banner({
+    ui.hero({
       label: 'OpenMeta Init',
       title: 'Build your contribution workspace',
       subtitle: 'We will verify GitHub access, connect an LLM provider, and save your matching profile.',
@@ -80,8 +109,9 @@ export class InitOrchestrator {
     });
 
     const config = await configService.get();
+    const completedSteps = new Set<SetupStepId>();
 
-    ui.section('Step 1 · GitHub access', 'OpenMeta needs a GitHub token so it can discover and rank contribution issues.');
+    this.renderStep('github', completedSteps, 'OpenMeta needs a GitHub token so it can discover and rank contribution issues.');
 
     let pat = '';
     let username = '';
@@ -92,11 +122,20 @@ export class InitOrchestrator {
       username = await this.promptUsername();
 
       githubService.initialize(pat, username);
-      ghValid = await githubService.validateCredentials();
+      ghValid = await this.validateGitHubCredentials();
 
       if (!ghValid) {
-        console.log(`\n  ${chalk.red('GitHub validation failed.')}`);
-        console.log(`  ${chalk.gray('Suggested scopes:')} ${chalk.white('repo, user')}\n`);
+        this.renderStep('github', completedSteps, 'GitHub credentials need to be retried.', true);
+        ui.callout({
+          label: 'OpenMeta Init',
+          title: 'GitHub validation failed',
+          subtitle: 'OpenMeta could not verify repository access with the token and username you entered.',
+          lines: [
+            'Suggested token scopes: repo, user',
+            'Check that the username matches the token owner.',
+          ],
+          tone: 'warning',
+        });
 
         const { retry } = await prompt<{ retry: boolean }>([
           {
@@ -107,7 +146,7 @@ export class InitOrchestrator {
           },
         ]);
         if (!retry) {
-          ui.banner({
+          ui.callout({
             label: 'OpenMeta Init',
             title: 'Setup paused',
             subtitle: 'GitHub access was not configured. Run "openmeta init" again whenever you are ready.',
@@ -118,7 +157,13 @@ export class InitOrchestrator {
       }
     }
 
-    ui.section('Step 2 · LLM provider', 'Your model is used to score issues and draft research notes or diaries.');
+    completedSteps.add('github');
+    ui.keyValues('GitHub connected', [
+      { label: 'Username', value: username, tone: 'success' },
+      { label: 'Token', value: ui.maskSecret(pat), tone: 'success' },
+    ]);
+
+    this.renderStep('llm', completedSteps, 'Your model is used to score issues and draft research notes or diaries.');
 
     let providerValue = '';
     let selectedProvider: LLMProviderOption | undefined;
@@ -154,11 +199,20 @@ export class InitOrchestrator {
       apiKey = await this.promptAPIKey();
 
       llmService.initialize(apiKey, selectedProvider.baseUrl, modelValue);
-      llmValid = await llmService.validateConnection();
+      llmValid = await this.validateLlmConnection();
 
       if (!llmValid) {
-        console.log(`\n  ${chalk.red('LLM validation failed.')}`);
-        console.log(`  ${chalk.gray('Check the provider, model, and API key, then try again.')}\n`);
+        this.renderStep('llm', completedSteps, 'Provider validation needs to be retried.', true);
+        ui.callout({
+          label: 'OpenMeta Init',
+          title: 'LLM validation failed',
+          subtitle: 'OpenMeta could not connect to the configured provider with the selected model and API key.',
+          lines: [
+            'Check provider endpoint, model name, and API key.',
+            'If you use a proxy or compatible endpoint, confirm the base URL is correct.',
+          ],
+          tone: 'warning',
+        });
 
         const { retry } = await prompt<{ retry: boolean }>([
           {
@@ -169,7 +223,7 @@ export class InitOrchestrator {
           },
         ]);
         if (!retry) {
-          ui.banner({
+          ui.callout({
             label: 'OpenMeta Init',
             title: 'Setup paused',
             subtitle: 'The LLM provider was not configured. Run "openmeta init" again when you want to continue.',
@@ -180,7 +234,15 @@ export class InitOrchestrator {
       }
     }
 
-    ui.section('Step 3 · Your matching profile', 'Choose the stack and focus areas that should influence issue scoring.');
+    completedSteps.add('llm');
+    ui.keyValues('LLM provider connected', [
+      { label: 'Provider', value: selectedProvider!.name, tone: 'success' },
+      { label: 'Model', value: modelValue, tone: 'success' },
+      { label: 'Endpoint', value: selectedProvider!.baseUrl, tone: 'info' },
+      { label: 'API key', value: ui.maskSecret(apiKey), tone: 'success' },
+    ]);
+
+    this.renderStep('profile', completedSteps, 'Choose the stack and focus areas that should influence issue scoring.');
 
     const { techStack } = await prompt<{
       techStack: string[];
@@ -223,7 +285,14 @@ export class InitOrchestrator {
       },
     ]);
 
-    ui.section('Step 4 · Target repository', 'Leave this blank if you want OpenMeta to manage a dedicated private repo for you.');
+    completedSteps.add('profile');
+    ui.keyValues('Matching profile captured', [
+      { label: 'Tech stack', value: techStack.join(', '), tone: 'info' },
+      { label: 'Proficiency', value: proficiency, tone: 'info' },
+      { label: 'Focus areas', value: focusAreas.join(', '), tone: 'info' },
+    ]);
+
+    this.renderStep('targetRepo', completedSteps, 'Leave this blank if you want OpenMeta to manage a dedicated private repo for you.');
 
     const { targetRepoPath } = await prompt<{ targetRepoPath: string }>([
       {
@@ -251,13 +320,22 @@ export class InitOrchestrator {
       },
     ]);
 
-    ui.section('Step 5 · Agent automation', 'OpenMeta can install a system scheduler so one init keeps your autonomous contribution agent running unattended.');
+    completedSteps.add('targetRepo');
+    ui.keyValues('Target repository policy', [
+      {
+        label: 'Publish destination',
+        value: targetRepoPath || 'Auto-managed private repository',
+        tone: targetRepoPath ? 'info' : 'accent',
+      },
+    ]);
+
+    this.renderStep('automation', completedSteps, 'OpenMeta can install a system scheduler so one init keeps your autonomous contribution agent running unattended.');
 
     const { automationEnabled } = await prompt<{ automationEnabled: boolean }>([
       {
         type: 'confirm',
         name: 'automationEnabled',
-          message: 'Enable unattended agent automation?',
+        message: 'Enable unattended agent automation?',
         default: config.automation.enabled,
       },
     ]);
@@ -291,7 +369,7 @@ export class InitOrchestrator {
 
       const confirmed = await this.confirmPersistentAutomation(scheduleTime, timezone);
       if (!confirmed) {
-        ui.banner({
+        ui.callout({
           label: 'OpenMeta Init',
           title: 'Automation not enabled',
           subtitle: 'Persistent unattended execution was cancelled before any scheduler changes were made.',
@@ -333,25 +411,49 @@ export class InitOrchestrator {
       },
     };
 
-    await configService.save(newConfig);
+    await ui.task({
+      title: 'Saving local configuration',
+      doneMessage: 'Local configuration saved',
+      failedMessage: 'Saving local configuration failed',
+      tone: 'info',
+    }, async () => {
+      await configService.save(newConfig);
+    });
 
-    const schedulerResult = await schedulerService.sync(newConfig);
+    const schedulerResult = await ui.task({
+      title: 'Syncing automation policy',
+      doneMessage: 'Automation policy synced',
+      failedMessage: 'Automation policy sync failed',
+      tone: automationEnabled ? 'warning' : 'info',
+    }, async () => schedulerService.sync(newConfig));
     const nextStepMessage = this.getNextStepMessage(newConfig, schedulerResult);
+    completedSteps.add('automation');
 
-    ui.banner({
+    ui.hero({
       label: 'OpenMeta Init',
       title: 'Setup complete',
       subtitle: 'Your local workspace is ready for unattended contribution scouting and artifact generation.',
       lines: [
-        `GitHub account: ${username}`,
-        `Model: ${selectedProvider!.name} / ${modelValue}`,
-        `Target repo: ${targetRepoPath || 'Auto-managed private repository'}`,
-        this.formatAutomationSummary(newConfig, schedulerResult),
         `Config saved at: ${configService.getConfigPath()}`,
         nextStepMessage,
       ],
       tone: schedulerResult.status === 'failed' ? 'warning' : 'success',
     });
+
+    this.renderStep('automation', completedSteps, 'All setup steps are complete.');
+    ui.stats('Setup summary', [
+      { label: 'GitHub', value: username, tone: 'success' },
+      { label: 'Model', value: modelValue, hint: selectedProvider!.name, tone: 'success' },
+      { label: 'Repo policy', value: targetRepoPath ? 'CUSTOM' : 'MANAGED', tone: 'accent' },
+      { label: 'Automation', value: automationEnabled ? 'ENABLED' : 'MANUAL', tone: automationEnabled ? 'warning' : 'muted' },
+    ]);
+    ui.keyValues('Saved preferences', [
+      { label: 'Tech stack', value: techStack.join(', '), tone: 'info' },
+      { label: 'Proficiency', value: proficiency, tone: 'info' },
+      { label: 'Focus areas', value: focusAreas.join(', '), tone: 'info' },
+      { label: 'Target repo', value: targetRepoPath || 'Auto-managed private repository', tone: 'info' },
+      { label: 'Automation', value: this.formatAutomationSummary(newConfig, schedulerResult), tone: schedulerResult.status === 'failed' ? 'warning' : 'success' },
+    ]);
   }
 
   private async promptGitHubPAT(): Promise<string> {
@@ -410,7 +512,7 @@ export class InitOrchestrator {
   }
 
   private async confirmPersistentAutomation(scheduleTime: string, timezone: string): Promise<boolean> {
-    ui.banner({
+    ui.callout({
       label: 'OpenMeta Init',
       title: 'Persistent automation warning',
       subtitle: 'When enabled, OpenMeta installs a system-level scheduled task that runs the autonomous contribution agent every day until you turn it off.',
@@ -421,6 +523,12 @@ export class InitOrchestrator {
       ],
       tone: 'warning',
     });
+
+    ui.keyValues('Automation impact', [
+      { label: 'Execution mode', value: 'Headless autonomous agent', tone: 'warning' },
+      { label: 'Interactive review', value: 'Skipped during scheduled runs', tone: 'warning' },
+      { label: 'Rollback', value: 'openmeta automation disable', tone: 'info' },
+    ]);
 
     const { acknowledgePersistence } = await prompt<{ acknowledgePersistence: boolean }>([
       {
@@ -461,6 +569,70 @@ export class InitOrchestrator {
     }
 
     return 'Fix the scheduler issue above, then rerun "openmeta init".';
+  }
+
+  private renderStep(
+    currentStep: SetupStepId,
+    completedSteps: Set<SetupStepId>,
+    subtitle: string,
+    failed: boolean = false,
+  ): void {
+    const currentIndex = SETUP_STEPS.findIndex((step) => step.id === currentStep);
+
+    ui.stepper('Setup progress', SETUP_STEPS.map((step, index) => ({
+      label: step.label,
+      description: step.description,
+      state: completedSteps.has(step.id)
+        ? 'done'
+        : step.id === currentStep
+          ? (failed ? 'error' : 'active')
+          : index < currentIndex
+            ? 'done'
+            : 'pending',
+    })));
+
+    ui.section(
+      `Step ${currentIndex + 1} · ${SETUP_STEPS[currentIndex]?.label || currentStep}`,
+      subtitle,
+    );
+  }
+
+  private async validateGitHubCredentials(): Promise<boolean> {
+    try {
+      await ui.task({
+        title: 'Validating GitHub credentials',
+        doneMessage: 'GitHub credentials verified',
+        failedMessage: 'GitHub credentials rejected',
+        tone: 'info',
+      }, async () => {
+        const valid = await githubService.validateCredentials();
+        if (!valid) {
+          throw new Error('GitHub validation failed');
+        }
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async validateLlmConnection(): Promise<boolean> {
+    try {
+      await ui.task({
+        title: 'Validating LLM provider',
+        doneMessage: 'LLM provider verified',
+        failedMessage: 'LLM provider rejected',
+        tone: 'info',
+      }, async () => {
+        const valid = await llmService.validateConnection();
+        if (!valid) {
+          throw new Error('LLM validation failed');
+        }
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 
