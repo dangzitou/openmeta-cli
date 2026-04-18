@@ -125,38 +125,32 @@ function renderPrefixedLines(
 
 function renderBrandMark(capabilities: UiCapabilities, tone: Tone = 'accent'): string[] {
   const lines = getOpenMetaWordmarkLines();
-  const palette = paletteForTone(tone);
   const gradientForTone = (() => {
     switch (tone) {
       case 'success':
-        return gradient(['#8df7a3', '#3ddc97', '#8df7a3']);
+        return gradient(['#d9fff0', '#42d392', '#14b8a6']);
       case 'warning':
-        return gradient(['#ffe28a', '#ffb347', '#ffe28a']);
+        return gradient(['#fff1c2', '#ffb84d', '#ff8a00']);
       case 'error':
-        return gradient(['#ffb0b0', '#ff5f6d', '#ffb0b0']);
+        return gradient(['#ffd6d6', '#ff6b6b', '#ff3b3b']);
       case 'muted':
-        return gradient(['#f4f4f5', '#d4d4d8', '#f4f4f5']);
+        return gradient(['#fafafa', '#d4d4d8', '#a1a1aa']);
       case 'accent':
-        return gradient(['#7dd3fc', '#c084fc', '#f9a8d4']);
+        return gradient(['#67e8f9', '#60a5fa', '#c084fc', '#f472b6']);
       case 'info':
       default:
-        return gradient(['#67e8f9', '#60a5fa', '#a78bfa']);
+        return gradient(['#a5f3fc', '#38bdf8', '#818cf8']);
     }
   })();
 
   return lines.map((line, index) => {
-    const slantedLine = `${' '.repeat(Math.floor(index / 2))}${line}`;
+    const slantedLine = `${' '.repeat(index)}${line}`;
 
     if (!capabilities.supportsColor) {
       return slantedLine;
     }
 
-    const coloredLine = gradientForTone.multiline(slantedLine);
-    const emphasizedLine = index === 0 || index === lines.length - 1
-      ? chalk.whiteBright.bold.italic(coloredLine)
-      : chalk.bold.italic(coloredLine);
-
-    return palette.accent === chalk.white ? chalk.white(emphasizedLine) : emphasizedLine;
+    return chalk.bold.italic(gradientForTone(slantedLine));
   });
 }
 
