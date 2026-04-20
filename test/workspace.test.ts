@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { simpleGit } from 'simple-git';
 import { workspaceService } from '../src/services/workspace.js';
+import { createRankedIssue } from './helpers/factories.js';
 
 const tempDirs: string[] = [];
 
@@ -107,6 +109,43 @@ describe('workspaceService.detectTestCommands', () => {
 
     expect(selected.commands.map((command) => command.command)).toEqual(['pytest']);
     expect(selected.warnings[0]).toContain('Skipped bun run test during headless validation');
+  });
+
+  test('reads workspace files safely and ignores paths outside the repository root', () => {
+    const workspacePath = makeWorkspace();
+    mkdirSync(join(workspacePath, 'src'), { recursive: true });
+    writeFileSync(join(workspacePath, 'src', 'index.ts'), 'export const ready = true;\n', 'utf-8');
+
+    const snippets = workspaceService.readWorkspaceFiles(workspacePath, ['src/index.ts', '../escape.ts']);
+
+    expect(snippets).toEqual([
+      {
+        path: 'src/index.ts',
+        content: 'export const ready = true;\n',
+      },
+    ]);
+  });
+
+  test('creates a unique workspace branch name when the base branch already exists', async () => {
+    const workspacePath = makeWorkspace();
+    const git = simpleGit(workspacePath);
+
+    await git.init(['--initial-branch=main']);
+    await git.addConfig('user.name', 'OpenMeta Test');
+    await git.addConfig('user.email', 'openmeta@example.com');
+    writeFileSync(join(workspacePath, 'README.md'), '# Demo\n', 'utf-8');
+    await git.add('README.md');
+    await git.commit('chore: initial commit');
+    await git.checkoutLocalBranch('openmeta/42-add-accessible-labels-to-icon-buttons');
+
+    const branchName = await (workspaceService as unknown as {
+      createWorkspaceBranchName: (
+        gitInstance: ReturnType<typeof simpleGit>,
+        issue: ReturnType<typeof createRankedIssue>,
+      ) => Promise<string>;
+    }).createWorkspaceBranchName(git, createRankedIssue());
+
+    expect(branchName).toMatch(/^openmeta\/42-add-accessible-labels-to-icon-buttons-\d+$/);
   });
 
   test('prioritizes file paths explicitly referenced in the issue body', () => {

@@ -11,12 +11,22 @@ interface AgentInternals {
     title: string;
     body: string;
   };
+  selectIssueForAutomation(
+    issues: Array<ReturnType<typeof createRankedIssue>>,
+    minOverallScore: number,
+  ): ReturnType<typeof createRankedIssue> | undefined;
   formatValidationSummary(results: Array<{
     command: string;
     exitCode: number | null;
     passed: boolean;
     output: string;
   }>): string;
+  hasBlockingValidationFailures(results: Array<{
+    command: string;
+    exitCode: number | null;
+    passed: boolean;
+    output: string;
+  }>): boolean;
   generateConcretePatch(
     issue: ReturnType<typeof createRankedIssue>,
     workspace: ReturnType<typeof createWorkspace>,
@@ -71,6 +81,48 @@ describe('AgentOrchestrator draft PR parsing', () => {
     ]);
 
     expect(summary).toBe('npm run lint=unavailable (127)');
+  });
+
+  test('falls back to a default PR title and body when the draft omits them', () => {
+    const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+    const issue = createRankedIssue({ repoFullName: 'acme/demo', number: 42 });
+    const parsed = orchestrator.parseDraftPullRequest('', issue);
+
+    expect(parsed.title).toBe('Draft contribution for acme/demo#42');
+    expect(parsed.body).toContain('Draft contribution artifacts for acme/demo#42.');
+  });
+
+  test('selects the first issue that meets the automation threshold', () => {
+    const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+    const issues = [
+      createRankedIssue({ opportunity: { ...createRankedIssue().opportunity, overallScore: 68 } }),
+      createRankedIssue({ repoFullName: 'acme/high', repoName: 'high', number: 77, opportunity: { ...createRankedIssue().opportunity, overallScore: 81 } }),
+    ];
+
+    const selected = orchestrator.selectIssueForAutomation(issues, 70);
+    expect(selected?.repoFullName).toBe('acme/high');
+  });
+
+  test('treats infrastructure validation failures as non-blocking', () => {
+    const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+
+    expect(orchestrator.hasBlockingValidationFailures([
+      {
+        command: 'npm run lint',
+        exitCode: 127,
+        passed: false,
+        output: 'command not found',
+      },
+    ])).toBe(false);
+
+    expect(orchestrator.hasBlockingValidationFailures([
+      {
+        command: 'pytest',
+        exitCode: 1,
+        passed: false,
+        output: 'AssertionError',
+      },
+    ])).toBe(true);
   });
 
   test('attempts a single validation repair pass after blocking failures', async () => {

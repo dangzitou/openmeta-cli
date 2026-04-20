@@ -1,11 +1,30 @@
 import type {
   ContributionInboxItem,
+  GitHubIssue,
   MatchedIssue,
   ProofOfWorkRecord,
   RankedIssue,
   RepoMemory,
   RepoWorkspaceContext,
 } from '../../src/types/index.js';
+
+export function createIssue(overrides: Partial<GitHubIssue> = {}): GitHubIssue {
+  const issue = createMatchedIssue(overrides);
+  return {
+    id: issue.id,
+    number: issue.number,
+    title: issue.title,
+    body: issue.body,
+    htmlUrl: issue.htmlUrl,
+    repoName: issue.repoName,
+    repoFullName: issue.repoFullName,
+    repoDescription: issue.repoDescription,
+    repoStars: issue.repoStars,
+    labels: issue.labels,
+    createdAt: issue.createdAt,
+    updatedAt: issue.updatedAt,
+  };
+}
 
 export function createMatchedIssue(overrides: Partial<MatchedIssue> = {}): MatchedIssue {
   return {

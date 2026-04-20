@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { ConfigService } from '../src/infra/config.js';
@@ -53,6 +53,44 @@ describe('stateful services', () => {
 
     expect(loaded.github.pat).toBe('ghp_test_token');
     expect(loaded.llm.apiKey).toBe('sk-test-key');
+  });
+
+  test('config service resets to defaults and keeps a backup of the previous file', async () => {
+    const service = new ConfigService();
+    const config = await service.get();
+
+    config.github.username = 'custom-user';
+    config.automation.scheduleTime = '18:30';
+    await service.save(config);
+    await service.reset();
+
+    const resetConfig = await service.load();
+    const configPath = service.getConfigPath();
+    const backupPath = `${configPath}.backup`;
+
+    expect(existsSync(backupPath)).toBe(true);
+    expect(readFileSync(backupPath, 'utf-8')).toContain('custom-user');
+    expect(resetConfig.github.username).toBe('');
+    expect(resetConfig.automation.scheduleTime).toBe('09:00');
+  });
+
+  test('config service fills defaults when loading a partial config file', async () => {
+    const service = new ConfigService();
+    const configPath = service.getConfigPath();
+
+    rmSync(join(tempRoot, '.config'), { recursive: true, force: true });
+    mkdirSync(join(tempRoot, '.config', 'openmeta'), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({
+      github: {
+        username: 'partial-user',
+      },
+    }), 'utf-8');
+
+    const loaded = await service.load();
+
+    expect(loaded.github.username).toBe('partial-user');
+    expect(loaded.llm.modelName).toBe('gpt-4o-mini');
+    expect(loaded.automation.scheduleTime).toBe('09:00');
   });
 
   test('memory service persists repo memory snapshots', () => {
