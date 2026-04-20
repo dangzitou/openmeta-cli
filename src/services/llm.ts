@@ -252,7 +252,7 @@ Repo Stars: ${i.repoStars}`
         continue;
       }
 
-      const scoreMatch = issueLine.match(/SCORE:\s*(\d+)|Score:\s*(\d+)|#\d+\s*(\d+)/i);
+      const scoreMatch = issueLine.match(/SCORE:\s*(\d+)|Score:\s*(\d+)|#\d+\s+(\d+)/i);
       let score = 0;
       if (scoreMatch) {
         const rawScore = scoreMatch[1] || scoreMatch[2] || scoreMatch[3];

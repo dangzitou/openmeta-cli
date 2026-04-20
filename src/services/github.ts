@@ -199,9 +199,26 @@ export class GitHubService {
   }
 
   private parseRepositoryUrl(repositoryUrl: string): RepoIdentifier {
-    const parts = repositoryUrl.split('/');
-    const owner = parts.at(-2);
-    const repo = parts.at(-1);
+    let owner: string | undefined;
+    let repo: string | undefined;
+
+    try {
+      const parsed = new URL(repositoryUrl);
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      const reposIndex = segments.indexOf('repos');
+
+      if (reposIndex >= 0) {
+        owner = segments[reposIndex + 1];
+        repo = segments[reposIndex + 2];
+      } else {
+        owner = segments.at(-2);
+        repo = segments.at(-1);
+      }
+    } catch {
+      const parts = repositoryUrl.split('/').filter(Boolean);
+      owner = parts.at(-2);
+      repo = parts.at(-1);
+    }
 
     if (!owner || !repo) {
       throw new Error(`Invalid GitHub repository URL: ${repositoryUrl}`);
