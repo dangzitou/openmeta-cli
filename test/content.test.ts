@@ -6,6 +6,7 @@ import {
   createMemory,
   createPatchDraft,
   createProofRecord,
+  createPullRequestDraft,
   createRankedIssue,
   createWorkspace,
 } from './helpers/factories.js';
@@ -28,7 +29,7 @@ describe('contentService', () => {
       createWorkspace(),
       createMemory(),
       createPatchDraft(),
-      'PR Draft Body',
+      createPullRequestDraft(),
     );
 
     expect(markdown).toContain('## Opportunity Snapshot');
@@ -41,7 +42,7 @@ describe('contentService', () => {
     expect(markdown).toContain('## Patch Draft');
     expect(markdown).toContain('## Goal');
     expect(markdown).toContain('Add accessible labels to icon-only buttons');
-    expect(markdown).toContain('PR Draft Body');
+    expect(markdown).toContain('Title: Add aria-label handling to icon-only buttons');
   });
 
   test('renders structured patch drafts as markdown', () => {
@@ -52,6 +53,15 @@ describe('contentService', () => {
     expect(markdown).toContain('`src/components/IconButton.tsx`');
     expect(markdown).toContain('### Update button API');
     expect(markdown).toContain('## Validation Notes');
+  });
+
+  test('renders structured pull request drafts as markdown', () => {
+    const markdown = contentService.formatPullRequestDraftMarkdown(createPullRequestDraft());
+
+    expect(markdown).toContain('Title: Add aria-label handling to icon-only buttons');
+    expect(markdown).toContain('## Summary');
+    expect(markdown).toContain('## Changes');
+    expect(markdown).toContain('## Validation');
   });
 
   test('formats inbox and proof-of-work markdown summaries', () => {

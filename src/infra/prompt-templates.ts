@@ -184,16 +184,23 @@ Current Files:
 
 export const PR_DRAFT_PROMPT = `You are OpenMeta, an autonomous open source contribution agent.
 
-Write a pull request draft in Markdown for the selected issue.
+Write a pull request draft in strict JSON for the selected issue.
 
 Requirements:
-1. The first line must be exactly: Title: <single concise PR title>;
-2. After the title line, output sections in this exact order as markdown headings: ## Summary, ## Changes, ## Validation, ## Risks;
-3. Summary must explain the user problem and the intended fix;
-4. Changes must be a flat bullet list;
-5. Validation must mention the provided test commands and whether they passed or are still pending;
-6. Risks must be honest and concrete;
-7. Do not add any heading before the Title line.
+1. Return one valid JSON object only. No markdown. No commentary.
+2. The title must be concise and ready for a real pull request.
+3. Summary must explain the user problem and the intended fix.
+4. Changes, validation, and risks must be flat string lists.
+5. Validation must mention the provided test commands and whether they passed or are still pending.
+
+Output schema:
+{
+  "title": "single concise PR title",
+  "summary": "problem and intended fix",
+  "changes": ["specific change"],
+  "validation": ["validation note"],
+  "risks": ["honest risk"]
+}
 
 Issue:
 {{issueContext}}

@@ -1,4 +1,4 @@
-import type { PatchDraft } from '../contracts/index.js';
+import type { PatchDraft, PullRequestDraft } from '../contracts/index.js';
 import type {
   ContentType,
   ContributionInboxItem,
@@ -104,12 +104,43 @@ export class ContentService {
     return lines.join('\n');
   }
 
+  formatPullRequestDraftBody(draft: PullRequestDraft): string {
+    const lines = [
+      '## Summary',
+      '',
+      draft.summary,
+      '',
+      '## Changes',
+      '',
+      ...draft.changes.map((change) => `- ${change}`),
+      '',
+      '## Validation',
+      '',
+      ...(draft.validation.length > 0 ? draft.validation.map((item) => `- ${item}`) : ['- Not run']),
+      '',
+      '## Risks',
+      '',
+      ...(draft.risks.length > 0 ? draft.risks.map((item) => `- ${item}`) : ['- None']),
+      '',
+    ];
+
+    return lines.join('\n');
+  }
+
+  formatPullRequestDraftMarkdown(draft: PullRequestDraft): string {
+    return [
+      `Title: ${draft.title}`,
+      '',
+      this.formatPullRequestDraftBody(draft),
+    ].join('\n');
+  }
+
   formatContributionDossier(
     issue: RankedIssue,
     workspace: RepoWorkspaceContext,
     memory: RepoMemory,
     patchDraft: PatchDraft,
-    prDraft: string,
+    prDraft: PullRequestDraft,
   ): string {
     const lines = [
       `# OpenMeta Contribution Dossier - ${issue.repoFullName}#${issue.number}`,
@@ -176,7 +207,7 @@ export class ContentService {
       '',
       '## PR Draft',
       '',
-      prDraft,
+      this.formatPullRequestDraftMarkdown(prDraft),
       '',
       `_Generated at ${new Date().toISOString()}_`,
       '',

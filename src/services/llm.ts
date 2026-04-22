@@ -4,6 +4,8 @@ import {
   ImplementationDraftSchema,
   PatchDraftSchema,
   type PatchDraft,
+  PullRequestDraftSchema,
+  type PullRequestDraft,
 } from '../contracts/index.js';
 import type {
   GitHubIssue,
@@ -163,7 +165,7 @@ Repo Stars: ${i.repoStars}`
     issue: RankedIssue,
     patchDraft: PatchDraft,
     workspace: RepoWorkspaceContext,
-  ): Promise<string> {
+  ): Promise<PullRequestDraft> {
     const validationContext = [
       `Detected Commands: ${workspace.testCommands.map((item) => item.command).join(', ') || 'none'}`,
       `Runnable Commands: ${workspace.validationCommands.map((item) => item.command).join(', ') || 'none'}`,
@@ -176,7 +178,10 @@ Repo Stars: ${i.repoStars}`
       validationContext,
     });
 
-    return await this.chat(prompt);
+    return this.generateStructuredOutput({
+      prompt,
+      parser: this.parsePullRequestDraft.bind(this),
+    });
   }
 
   async generateImplementationRepairDraft(
@@ -309,6 +314,10 @@ Repo Stars: ${i.repoStars}`
 
   private parsePatchDraft(content: string): PatchDraft {
     return this.parseStructuredJson(content, PatchDraftSchema);
+  }
+
+  private parsePullRequestDraft(content: string): PullRequestDraft {
+    return this.parseStructuredJson(content, PullRequestDraftSchema);
   }
 
   private parseStructuredJson<T>(content: string, schema: z.ZodType<T>): T {

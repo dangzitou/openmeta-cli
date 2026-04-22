@@ -4,10 +4,15 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { AgentOrchestrator } from '../src/orchestration/agent.js';
 import { llmService, workspaceService } from '../src/services/index.js';
-import { createPatchDraft, createRankedIssue, createWorkspace } from './helpers/factories.js';
+import {
+  createPatchDraft,
+  createPullRequestDraft,
+  createRankedIssue,
+  createWorkspace,
+} from './helpers/factories.js';
 
 interface AgentInternals {
-  parseDraftPullRequest(prDraft: string, issue: ReturnType<typeof createRankedIssue>): {
+  buildDraftPullRequest(prDraft: ReturnType<typeof createPullRequestDraft>): {
     title: string;
     body: string;
   };
@@ -55,16 +60,11 @@ afterEach(() => {
 });
 
 describe('AgentOrchestrator draft PR parsing', () => {
-  test('extracts the title from the explicit Title line', () => {
+  test('builds a real pull request payload from the structured draft', () => {
     const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
-    const parsed = orchestrator.parseDraftPullRequest([
-      'Title: Add aria-label attributes to icon-only buttons',
-      '',
-      '## Summary',
-      'Add accessible labels across key UI buttons.',
-    ].join('\n'), createRankedIssue());
+    const parsed = orchestrator.buildDraftPullRequest(createPullRequestDraft());
 
-    expect(parsed.title).toBe('Add aria-label attributes to icon-only buttons');
+    expect(parsed.title).toBe('Add aria-label handling to icon-only buttons');
     expect(parsed.body).toContain('## Summary');
     expect(parsed.body).not.toContain('Title:');
   });
@@ -81,15 +81,6 @@ describe('AgentOrchestrator draft PR parsing', () => {
     ]);
 
     expect(summary).toBe('npm run lint=unavailable (127)');
-  });
-
-  test('falls back to a default PR title and body when the draft omits them', () => {
-    const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
-    const issue = createRankedIssue({ repoFullName: 'acme/demo', number: 42 });
-    const parsed = orchestrator.parseDraftPullRequest('', issue);
-
-    expect(parsed.title).toBe('Draft contribution for acme/demo#42');
-    expect(parsed.body).toContain('Draft contribution artifacts for acme/demo#42.');
   });
 
   test('selects the first issue that meets the automation threshold', () => {

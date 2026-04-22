@@ -1,4 +1,4 @@
-import type { PatchDraft } from '../contracts/index.js';
+import type { PatchDraft, PullRequestDraft } from '../contracts/index.js';
 import type { MatchedIssue } from './github.types.js';
 
 export interface OpportunityBreakdown {
@@ -128,7 +128,7 @@ export interface ContributionAgentResult {
   workspace: RepoWorkspaceContext;
   memory: RepoMemory;
   patchDraft: PatchDraft;
-  prDraft: string;
+  prDraft: PullRequestDraft;
   dossier: string;
   artifacts: ContributionArtifacts;
   inboxItem: ContributionInboxItem;

@@ -5,6 +5,13 @@ import { createIssue } from './helpers/factories.js';
 
 interface LLMServiceInternals {
   parseImplementationDraft(content: string): ImplementationDraft;
+  parsePullRequestDraft(content: string): {
+    title: string;
+    summary: string;
+    changes: string[];
+    validation: string[];
+    risks: string[];
+  };
   parseLLMResponse(content: string, originalIssues: ReturnType<typeof createIssue>[]): MatchedIssue[];
 }
 
@@ -140,5 +147,23 @@ describe('LLMService issue scoring response parsing', () => {
     expect(parsed[0]?.analysis.techRequirements).toEqual(['react', 'typescript', 'accessibility']);
     expect(parsed[1]?.repoFullName).toBe('acme/web');
     expect(parsed[1]?.analysis.estimatedWorkload).toBe('30 minutes');
+  });
+});
+
+describe('LLMService pull request draft parsing', () => {
+  test('parses structured pull request drafts', () => {
+    const service = new LLMService() as unknown as LLMServiceInternals;
+    const draft = service.parsePullRequestDraft(`
+      {
+        "title": "Add aria-label handling to icon-only buttons",
+        "summary": "Ensure icon-only buttons expose accessible names.",
+        "changes": ["Update the shared IconButton component"],
+        "validation": ["bun test (pending)"],
+        "risks": ["Snapshot updates may be required"]
+      }
+    `);
+
+    expect(draft.title).toBe('Add aria-label handling to icon-only buttons');
+    expect(draft.changes).toEqual(['Update the shared IconButton component']);
   });
 });

@@ -1,4 +1,4 @@
-import type { PatchDraft } from '../../src/contracts/index.js';
+import type { PatchDraft, PullRequestDraft } from '../../src/contracts/index.js';
 import type {
   ContributionInboxItem,
   GitHubIssue,
@@ -150,6 +150,20 @@ export function createPatchDraft(overrides: Partial<PatchDraft> = {}): PatchDraf
     ],
     risks: ['Consumer code may rely on the previous unlabeled icon-only behavior'],
     validationNotes: ['Run bun test after updating the component and tests'],
+    ...overrides,
+  };
+}
+
+export function createPullRequestDraft(overrides: Partial<PullRequestDraft> = {}): PullRequestDraft {
+  return {
+    title: 'Add aria-label handling to icon-only buttons',
+    summary: 'Ensure icon-only buttons expose accessible names and document the updated behavior.',
+    changes: [
+      'Add aria-label handling to the shared IconButton component',
+      'Expand component tests for icon-only button accessibility',
+    ],
+    validation: ['bun test (pending)'],
+    risks: ['Consumers may need to update snapshots that cover button rendering'],
     ...overrides,
   };
 }

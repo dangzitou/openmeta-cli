@@ -3,7 +3,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { Octokit } from '@octokit/rest';
 import { simpleGit, type SimpleGit } from 'simple-git';
-import type { PatchDraft } from '../contracts/index.js';
+import type { PatchDraft, PullRequestDraft } from '../contracts/index.js';
 import type {
   AppConfig,
   ContributionAgentResult,
@@ -209,6 +209,7 @@ export class AgentOrchestrator {
       tone: 'info',
     }, async () => llmService.generatePrDraft(selectedIssue, patchDraft, workspaceForArtifacts));
     const patchDraftMarkdown = contentService.formatPatchDraftMarkdown(patchDraft);
+    const prDraftMarkdown = contentService.formatPullRequestDraftMarkdown(prDraft);
 
     const contributionPullRequest = await this.submitContributionPullRequestIfPossible({
       config,
@@ -262,7 +263,7 @@ export class AgentOrchestrator {
     this.showArtifactPreview({
       issue: selectedIssue,
       artifactRelativeDir: join('contributions', getLocalDateStamp(), `${selectedIssue.repoFullName.replace(/\//g, '__')}__${selectedIssue.number}`),
-      draftTitle: this.parseDraftPullRequest(prDraft, selectedIssue).title,
+      draftTitle: prDraft.title,
       changedFiles: implementation.changedFiles,
       validationResults: implementation.validationResults,
       pullRequestUrl: contributionPullRequest.url,
@@ -278,7 +279,7 @@ export class AgentOrchestrator {
         artifacts,
         dossier,
         patchDraftMarkdown,
-        prDraft,
+        prDraftMarkdown,
         memoryMarkdown: memoryService.renderMarkdown(memory),
         inboxMarkdown: inboxService.renderMarkdown(inboxItems),
         proofMarkdown,
@@ -290,7 +291,7 @@ export class AgentOrchestrator {
       headless,
       issue: selectedIssue,
       patchDraftMarkdown,
-      prDraft,
+      prDraftMarkdown,
       dossier,
       memoryMarkdown: memoryService.renderMarkdown(memory),
       inboxMarkdown: inboxService.renderMarkdown(inboxItems),
@@ -794,14 +795,14 @@ export class AgentOrchestrator {
     artifacts: ReturnType<AgentOrchestrator['prepareLocalArtifactPaths']>;
     dossier: string;
     patchDraftMarkdown: string;
-    prDraft: string;
+    prDraftMarkdown: string;
     memoryMarkdown: string;
     inboxMarkdown: string;
     proofMarkdown: string;
   }): void {
     writeFileSync(input.artifacts.dossierPath, input.dossier, 'utf-8');
     writeFileSync(input.artifacts.patchDraftPath, input.patchDraftMarkdown, 'utf-8');
-    writeFileSync(input.artifacts.prDraftPath, input.prDraft, 'utf-8');
+    writeFileSync(input.artifacts.prDraftPath, input.prDraftMarkdown, 'utf-8');
     writeFileSync(input.artifacts.memoryPath, input.memoryMarkdown, 'utf-8');
     writeFileSync(input.artifacts.inboxPath, input.inboxMarkdown, 'utf-8');
     writeFileSync(input.artifacts.proofOfWorkPath, input.proofMarkdown, 'utf-8');
@@ -905,7 +906,7 @@ export class AgentOrchestrator {
     headless: boolean;
     issue: RankedIssue;
     patchDraftMarkdown: string;
-    prDraft: string;
+    prDraftMarkdown: string;
     dossier: string;
     memoryMarkdown: string;
     inboxMarkdown: string;
@@ -935,7 +936,7 @@ export class AgentOrchestrator {
     const publishResult = await gitService.writeAndPublish([
       { path: join(artifactRelativeDir, 'dossier.md'), content: input.dossier },
       { path: join(artifactRelativeDir, 'patch-draft.md'), content: input.patchDraftMarkdown },
-      { path: join(artifactRelativeDir, 'pr-draft.md'), content: input.prDraft },
+      { path: join(artifactRelativeDir, 'pr-draft.md'), content: input.prDraftMarkdown },
       { path: join('memory', `${input.issue.repoFullName.replace(/\//g, '__')}.md`), content: input.memoryMarkdown },
       { path: 'INBOX.md', content: input.inboxMarkdown },
       { path: 'PROOF_OF_WORK.md', content: input.proofMarkdown },
@@ -970,7 +971,7 @@ export class AgentOrchestrator {
     config: AppConfig;
     headless: boolean;
     issue: RankedIssue;
-    prDraft: string;
+    prDraft: PullRequestDraft;
     workspace: RepoWorkspaceContext;
     changedFiles: string[];
     validationResults: TestResult[];
@@ -1028,7 +1029,7 @@ export class AgentOrchestrator {
       const upstreamRepo = await this.getUpstreamRepositoryContext(input.issue);
       const forkRepo = await this.ensureForkRepository(upstreamRepo);
       const branchName = this.buildPublishBranchName(input.issue);
-      const draftPullRequest = this.parseDraftPullRequest(input.prDraft, input.issue);
+      const draftPullRequest = this.buildDraftPullRequest(input.prDraft);
       const commitMessage = this.buildContributionCommitMessage(input.issue);
 
       await this.createCommitOnFork({
@@ -1465,40 +1466,11 @@ export class AgentOrchestrator {
     return `openmeta/agent-${issue.number}-${slug || 'issue'}-${Date.now()}`;
   }
 
-  private parseDraftPullRequest(prDraft: string, issue: RankedIssue): DraftPullRequest {
-    const title = this.extractPullRequestTitle(prDraft) || `Draft contribution for ${issue.repoFullName}#${issue.number}`;
-    const body = this.stripTitleSection(prDraft).trim().length > 0
-      ? this.stripTitleSection(prDraft).trim()
-      : [
-        '## Summary',
-        '',
-        `Draft contribution artifacts for ${issue.repoFullName}#${issue.number}.`,
-      ].join('\n');
-
-    return { title, body };
-  }
-
-  private extractPullRequestTitle(prDraft: string): string | null {
-    const titleLine = prDraft.match(/^Title:\s*(.+)$/im);
-    if (titleLine?.[1]) {
-      return titleLine[1].trim();
-    }
-
-    const titleSection = prDraft.match(/^(?:#{1,6}\s*)?Title\s*$\n+([^\n#][^\n]*)/im);
-    if (titleSection?.[1]) {
-      return titleSection[1].trim();
-    }
-
-    return null;
-  }
-
-  private stripTitleSection(prDraft: string): string {
-    let normalized = prDraft.trim();
-
-    normalized = normalized.replace(/^Title:\s*.+\n*/im, '').trim();
-    normalized = normalized.replace(/^(?:#{1,6}\s*)?Title\s*$\n+[^\n]*\n*/im, '').trim();
-
-    return normalized;
+  private buildDraftPullRequest(prDraft: PullRequestDraft): DraftPullRequest {
+    return {
+      title: prDraft.title,
+      body: contentService.formatPullRequestDraftBody(prDraft),
+    };
   }
 
   private async getUpstreamRepositoryContext(issue: RankedIssue): Promise<TargetRepoContext> {
