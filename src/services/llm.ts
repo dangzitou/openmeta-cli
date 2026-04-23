@@ -136,12 +136,7 @@ Repo Stars: ${i.repoStars}`
       ...workspace.snippets.map((snippet) => `FILE: ${snippet.path}\n${snippet.content}`),
     ].join('\n\n');
 
-    const repoMemory = [
-      `Last Selected Issue: ${memory.lastSelectedIssue || 'n/a'}`,
-      `Generated Dossiers: ${memory.generatedDossiers}`,
-      `Preferred Paths: ${memory.preferredPaths.join(', ') || 'none'}`,
-      `Known Test Commands: ${memory.detectedTestCommands.join(', ') || 'none'}`,
-    ].join('\n');
+    const repoMemory = this.formatRepoMemory(memory);
 
     const prompt = fillPrompt(PATCH_DRAFT_PROMPT, {
       issueContext: this.formatRankedIssue(issue),
@@ -383,6 +378,38 @@ Repo Stars: ${i.repoStars}`
       `Opportunity Score: ${issue.opportunity.score}`,
       `Overall Score: ${issue.opportunity.overallScore}`,
       `Opportunity Summary: ${issue.opportunity.summary}`,
+    ].join('\n');
+  }
+
+  private formatRepoMemory(memory: RepoMemory): string {
+    const topPathSignals = memory.pathSignals.length > 0
+      ? memory.pathSignals
+        .slice(0, 5)
+        .map((signal) => `- ${signal.path} | candidate ${signal.candidateCount} | changed ${signal.changedCount} | validation ${signal.successfulValidationCount} | published ${signal.publishedCount}`)
+      : ['- none'];
+    const validationSignals = memory.validationSignals.length > 0
+      ? memory.validationSignals
+        .slice(0, 5)
+        .map((signal) => `- ${signal.command} | failures ${signal.failureCount} | last exit ${signal.lastExitCode ?? 'n/a'}${signal.sampleOutput ? ` | sample ${signal.sampleOutput}` : ''}`)
+      : ['- none'];
+    const recentOutcomes = memory.recentIssues.length > 0
+      ? memory.recentIssues
+        .slice(0, 5)
+        .map((issue) => `- ${issue.reference} | status ${issue.status} | changed ${issue.changedFiles.join(', ') || 'none'} | validation ${issue.validationSummary}`)
+      : ['- none'];
+
+    return [
+      `Last Selected Issue: ${memory.lastSelectedIssue || 'n/a'}`,
+      `Generated Dossiers: ${memory.generatedDossiers}`,
+      `Preferred Paths: ${memory.preferredPaths.join(', ') || 'none'}`,
+      `Known Test Commands: ${memory.detectedTestCommands.join(', ') || 'none'}`,
+      `Run Stats: total=${memory.runStats.totalRuns}, published=${memory.runStats.publishedRuns}, real_pr=${memory.runStats.realPrRuns}, review_required=${memory.runStats.reviewRequiredRuns}, validation_ok=${memory.runStats.successfulValidationRuns}, validation_failed=${memory.runStats.failedValidationRuns}`,
+      'Top Path Signals:',
+      ...topPathSignals,
+      'Recent Validation Failure Signals:',
+      ...validationSignals,
+      'Recent Issue Outcomes:',
+      ...recentOutcomes,
     ].join('\n');
   }
 

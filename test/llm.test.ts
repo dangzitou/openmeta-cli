@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { LLMService } from '../src/services/llm.js';
 import type { StructuredOutputStatus } from '../src/contracts/index.js';
 import type { ImplementationDraft, MatchedIssue } from '../src/types/index.js';
-import { createIssue } from './helpers/factories.js';
+import { createIssue, createMemory } from './helpers/factories.js';
 
 interface LLMServiceInternals {
   parseImplementationDraft(content: string): {
@@ -33,6 +33,7 @@ interface LLMServiceInternals {
     status: StructuredOutputStatus;
     data: MatchedIssue[];
   };
+  formatRepoMemory(memory: ReturnType<typeof createMemory>): string;
 }
 
 describe('LLMService implementation draft parsing', () => {
@@ -264,5 +265,20 @@ describe('LLMService pull request draft parsing', () => {
     expect(draft.status).toBe('success');
     expect(draft.data.title).toBe('Add aria-label handling to icon-only buttons');
     expect(draft.data.changes).toEqual(['Update the shared IconButton component']);
+  });
+});
+
+describe('LLMService repo memory formatting', () => {
+  test('includes run stats, path history, validation failures, and recent outcomes', () => {
+    const service = new LLMService() as unknown as LLMServiceInternals;
+    const formatted = service.formatRepoMemory(createMemory());
+
+    expect(formatted).toContain('Run Stats: total=2, published=1, real_pr=1');
+    expect(formatted).toContain('Top Path Signals:');
+    expect(formatted).toContain('src/components/IconButton.tsx | candidate 3 | changed 2');
+    expect(formatted).toContain('Recent Validation Failure Signals:');
+    expect(formatted).toContain('bun test | failures 1 | last exit 1');
+    expect(formatted).toContain('Recent Issue Outcomes:');
+    expect(formatted).toContain('acme/demo#42 | status published');
   });
 });
