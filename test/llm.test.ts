@@ -5,6 +5,13 @@ import { createIssue } from './helpers/factories.js';
 
 interface LLMServiceInternals {
   parseImplementationDraft(content: string): ImplementationDraft;
+  parsePatchDraft(content: string): {
+    goal: string;
+    targetFiles: Array<{ path: string; reason: string }>;
+    proposedChanges: Array<{ title: string; details: string; files: string[] }>;
+    risks: string[];
+    validationNotes: string[];
+  };
   parsePullRequestDraft(content: string): {
     title: string;
     summary: string;
@@ -182,15 +189,52 @@ describe('LLMService issue scoring response parsing', () => {
 });
 
 describe('LLMService pull request draft parsing', () => {
+  test('parses structured patch drafts wrapped in envelopes', () => {
+    const service = new LLMService() as unknown as LLMServiceInternals;
+    const draft = service.parsePatchDraft(`
+      {
+        "version": "1",
+        "kind": "patch_draft",
+        "status": "success",
+        "data": {
+          "goal": "Add accessible labels to icon-only buttons",
+          "targetFiles": [
+            {
+              "path": "src/components/IconButton.tsx",
+              "reason": "Primary component logic"
+            }
+          ],
+          "proposedChanges": [
+            {
+              "title": "Update button API",
+              "details": "Require an accessible label for icon-only rendering.",
+              "files": ["src/components/IconButton.tsx"]
+            }
+          ],
+          "risks": ["Consumer code may rely on current behavior"],
+          "validationNotes": ["Run bun test after the patch"]
+        }
+      }
+    `);
+
+    expect(draft.goal).toBe('Add accessible labels to icon-only buttons');
+    expect(draft.targetFiles[0]?.path).toBe('src/components/IconButton.tsx');
+  });
+
   test('parses structured pull request drafts', () => {
     const service = new LLMService() as unknown as LLMServiceInternals;
     const draft = service.parsePullRequestDraft(`
       {
-        "title": "Add aria-label handling to icon-only buttons",
-        "summary": "Ensure icon-only buttons expose accessible names.",
-        "changes": ["Update the shared IconButton component"],
-        "validation": ["bun test (pending)"],
-        "risks": ["Snapshot updates may be required"]
+        "version": "1",
+        "kind": "pull_request_draft",
+        "status": "success",
+        "data": {
+          "title": "Add aria-label handling to icon-only buttons",
+          "summary": "Ensure icon-only buttons expose accessible names.",
+          "changes": ["Update the shared IconButton component"],
+          "validation": ["bun test (pending)"],
+          "risks": ["Snapshot updates may be required"]
+        }
       }
     `);
 

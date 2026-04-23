@@ -88,22 +88,27 @@ Requirements:
 
 Output schema:
 {
-  "goal": "what the patch should achieve",
-  "targetFiles": [
-    {
-      "path": "relative/path/to/file",
-      "reason": "why this file matters"
-    }
-  ],
-  "proposedChanges": [
-    {
-      "title": "short step title",
-      "details": "specific implementation details",
-      "files": ["relative/path/to/file"]
-    }
-  ],
-  "risks": ["concrete risk"],
-  "validationNotes": ["concrete validation note"]
+  "version": "1",
+  "kind": "patch_draft",
+  "status": "success",
+  "data": {
+    "goal": "what the patch should achieve",
+    "targetFiles": [
+      {
+        "path": "relative/path/to/file",
+        "reason": "why this file matters"
+      }
+    ],
+    "proposedChanges": [
+      {
+        "title": "short step title",
+        "details": "specific implementation details",
+        "files": ["relative/path/to/file"]
+      }
+    ],
+    "risks": ["concrete risk"],
+    "validationNotes": ["concrete validation note"]
+  }
 }
 
 Issue:
@@ -243,11 +248,16 @@ Requirements:
 
 Output schema:
 {
-  "title": "single concise PR title",
-  "summary": "problem and intended fix",
-  "changes": ["specific change"],
-  "validation": ["validation note"],
-  "risks": ["honest risk"]
+  "version": "1",
+  "kind": "pull_request_draft",
+  "status": "success",
+  "data": {
+    "title": "single concise PR title",
+    "summary": "problem and intended fix",
+    "changes": ["specific change"],
+    "validation": ["validation note"],
+    "risks": ["honest risk"]
+  }
 }
 
 Issue:

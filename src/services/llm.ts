@@ -3,9 +3,9 @@ import { z } from 'zod';
 import {
   ImplementationDraftEnvelopeSchema,
   IssueMatchListSchema,
-  PatchDraftSchema,
+  PatchDraftEnvelopeSchema,
   type PatchDraft,
-  PullRequestDraftSchema,
+  PullRequestDraftEnvelopeSchema,
   type PullRequestDraft,
 } from '../contracts/index.js';
 import type {
@@ -298,11 +298,11 @@ Repo Stars: ${i.repoStars}`
   }
 
   private parsePatchDraft(content: string): PatchDraft {
-    return this.parseStructuredJson(content, PatchDraftSchema);
+    return this.parseStructuredJson(content, PatchDraftEnvelopeSchema).data;
   }
 
   private parsePullRequestDraft(content: string): PullRequestDraft {
-    return this.parseStructuredJson(content, PullRequestDraftSchema);
+    return this.parseStructuredJson(content, PullRequestDraftEnvelopeSchema).data;
   }
 
   private parseStructuredJson<T>(content: string, schema: z.ZodType<T>): T {
