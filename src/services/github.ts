@@ -38,6 +38,10 @@ interface IssueCachePayload {
   issues: GitHubIssue[];
 }
 
+interface IssueDiscoveryOptions {
+  refresh?: boolean;
+}
+
 export class GitHubService {
   private octokit: Octokit | null = null;
   private username: string = '';
@@ -63,15 +67,19 @@ export class GitHubService {
     }
   }
 
-  async fetchTrendingIssues(): Promise<GitHubIssue[]> {
+  async fetchTrendingIssues(options: IssueDiscoveryOptions = {}): Promise<GitHubIssue[]> {
     if (!this.octokit) {
       throw new Error('GitHub service not initialized');
     }
 
-    const cachedIssues = this.loadCachedIssues();
-    if (cachedIssues) {
-      logger.info(`Using cached GitHub issues (${cachedIssues.length}) to avoid unnecessary Search API calls.`);
-      return cachedIssues;
+    if (!options.refresh) {
+      const cachedIssues = this.loadCachedIssues();
+      if (cachedIssues) {
+        logger.info(`Using cached GitHub issues (${cachedIssues.length}) to avoid unnecessary Search API calls.`);
+        return cachedIssues;
+      }
+    } else {
+      logger.info('Refreshing GitHub issue discovery and ignoring the local search cache.');
     }
 
     const issues: GitHubIssue[] = [];

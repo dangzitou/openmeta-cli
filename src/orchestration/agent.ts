@@ -40,6 +40,12 @@ export interface AgentRunOptions {
   schedulerRun?: boolean;
   runChecks?: boolean;
   draftOnly?: boolean;
+  refresh?: boolean;
+}
+
+export interface ScoutRunOptions {
+  limit?: number;
+  refresh?: boolean;
 }
 
 interface TargetRepoContext {
@@ -118,6 +124,7 @@ export class AgentOrchestrator {
     const schedulerRun = Boolean(options.schedulerRun);
     const runChecks = typeof options.runChecks === 'boolean' ? options.runChecks : !headless;
     const draftOnly = Boolean(options.draftOnly);
+    const refresh = Boolean(options.refresh);
     const completedStages = new Set<AgentStageId>();
 
     ui.hero({
@@ -129,6 +136,7 @@ export class AgentOrchestrator {
       lines: [
         runChecks ? 'Baseline checks will fire wherever the repository exposes a safe command path.' : 'This pass will stay light and skip baseline checks.',
         draftOnly ? 'Draft-only mode will preserve artifacts without applying generated file edits or opening a PR.' : 'Generated patches can be applied after repository safety checks pass.',
+        refresh ? 'Issue discovery will bypass the local search cache for this run.' : 'Issue discovery may reuse the short local search cache.',
         headless ? `Unattended selection honors the saved threshold at ${config.automation.minMatchScore}/100.` : 'You stay in control at each decision gate before anything is published.',
       ],
     });
@@ -147,7 +155,7 @@ export class AgentOrchestrator {
       doneMessage: 'Opportunity ranking complete',
       failedMessage: 'Opportunity ranking failed',
       tone: 'info',
-    }, async () => this.loadRankedIssues(config));
+    }, async () => this.loadRankedIssues(config, { refresh }));
     if (rankedIssues.length === 0) {
       ui.emptyState(
         'OpenMeta Agent',
@@ -382,7 +390,9 @@ export class AgentOrchestrator {
     });
   }
 
-  async scout(limit: number = 10): Promise<void> {
+  async scout(options: ScoutRunOptions | number = {}): Promise<void> {
+    const limit = typeof options === 'number' ? options : options.limit ?? 10;
+    const refresh = typeof options === 'number' ? false : Boolean(options.refresh);
     const config = await configService.get();
     await this.validateConfig(config);
     await this.initializeClients(config);
@@ -393,6 +403,7 @@ export class AgentOrchestrator {
       subtitle: 'OpenMeta turns a noisy issue stream into a shortlist shaped by technical fit, timing, and real opening momentum.',
       lines: [
         `Saved threshold reference: ${config.automation.minMatchScore}/100.`,
+        refresh ? 'This scout run will ignore the local GitHub issue cache.' : 'This scout run may reuse the short local GitHub issue cache.',
       ],
     });
 
@@ -401,7 +412,7 @@ export class AgentOrchestrator {
       doneMessage: 'Contribution opportunities scored',
       failedMessage: 'Contribution opportunity scoring failed',
       tone: 'info',
-    }, async () => this.loadRankedIssues(config));
+    }, async () => this.loadRankedIssues(config, { refresh }));
     if (rankedIssues.length === 0) {
       ui.emptyState('OpenMeta Scout', 'No issues found', 'No issues met the current scoring thresholds.');
       return;
@@ -747,8 +758,8 @@ export class AgentOrchestrator {
     }
   }
 
-  private async loadRankedIssues(config: AppConfig): Promise<RankedIssue[]> {
-    const issues = await githubService.fetchTrendingIssues();
+  private async loadRankedIssues(config: AppConfig, options: { refresh?: boolean } = {}): Promise<RankedIssue[]> {
+    const issues = await githubService.fetchTrendingIssues({ refresh: options.refresh });
     const matched = await this.scoreIssuesInBatches(config.userProfile, issues);
     return opportunityService.rankIssues(matched);
   }

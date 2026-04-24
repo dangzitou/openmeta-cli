@@ -233,10 +233,12 @@ bun run ./src/cli.ts doctor
 | `openmeta doctor` | 检查本地配置、运行时、工作目录、目标仓库和调度器状态 |
 | `openmeta agent` | 运行自治贡献主流程 |
 | `openmeta agent --draft-only` | 只生成 dossier、patch draft 和 PR draft，不改仓库、不创建 PR |
+| `openmeta agent --refresh` | 忽略本地 issue 搜索缓存，重新从 GitHub 发现机会 |
 | `openmeta agent --headless` | 使用已保存设置进行无人值守执行 |
 | `openmeta agent --run-checks` | 执行检测到的基础校验命令 |
 | `openmeta daily` | `agent` 的兼容别名，支持相同运行参数 |
 | `openmeta scout --limit <count>` | 查看高价值贡献机会排名 |
+| `openmeta scout --refresh` | 强制刷新 GitHub issue discovery 缓存 |
 | `openmeta inbox` | 查看已起草的贡献机会收件箱 |
 | `openmeta pow` | 查看贡献工作量证明记录 |
 | `openmeta automation status` | 查看自动化状态 |
@@ -513,10 +515,12 @@ If you already built the binary:
 | `openmeta doctor` | Check local config, runtimes, paths, target repo, and scheduler state |
 | `openmeta agent` | Run the autonomous contribution workflow |
 | `openmeta agent --draft-only` | Generate dossier, patch draft, and PR draft artifacts without editing files or opening a PR |
+| `openmeta agent --refresh` | Ignore the local issue search cache and discover fresh GitHub opportunities |
 | `openmeta agent --headless` | Execute unattended using saved automation defaults |
 | `openmeta agent --run-checks` | Run detected baseline validation commands |
 | `openmeta daily` | Compatibility alias for `agent` with the same runtime options |
 | `openmeta scout --limit <count>` | Show ranked contribution opportunities |
+| `openmeta scout --refresh` | Force-refresh the GitHub issue discovery cache |
 | `openmeta inbox` | Show drafted contribution opportunities |
 | `openmeta pow` | Show proof-of-work history |
 | `openmeta automation status` | Show automation status |

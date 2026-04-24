@@ -7,6 +7,13 @@ import { createMatchedIssue } from './helpers/factories.js';
 import type { GitHubIssue } from '../src/types/index.js';
 
 interface GitHubServiceInternals {
+  octokit: {
+    rest: {
+      search: {
+        issuesAndPullRequests: () => Promise<{ data: { total_count: number; items: unknown[] } }>;
+      };
+    };
+  } | null;
   buildSearchQuery(labels: readonly string[]): string;
   shouldIncludeIssue(item: Record<string, unknown>): boolean;
   parseRepositoryUrl(repositoryUrl: string): { owner: string; repo: string; fullName: string };
@@ -175,5 +182,35 @@ describe('GitHubService internals', () => {
 
     writeFileSync(cachePath, JSON.stringify({ fetchedAt: new Date().toISOString(), issues: 'invalid' }), 'utf-8');
     expect(service.loadCachedIssues()).toBeNull();
+  });
+
+  test('can bypass the issue discovery cache when refresh is requested', async () => {
+    const service = new GitHubService();
+    const internals = service as unknown as GitHubServiceInternals;
+    let searchCalls = 0;
+
+    internals.saveCachedIssues([createIssue()]);
+    internals.octokit = {
+      rest: {
+        search: {
+          issuesAndPullRequests: async () => {
+            searchCalls += 1;
+            return {
+              data: {
+                total_count: 0,
+                items: [],
+              },
+            };
+          },
+        },
+      },
+    };
+
+    const cached = await service.fetchTrendingIssues();
+    const refreshed = await service.fetchTrendingIssues({ refresh: true });
+
+    expect(cached).toHaveLength(1);
+    expect(refreshed).toEqual([]);
+    expect(searchCalls).toBe(2);
   });
 });
