@@ -227,20 +227,20 @@ If you already built the binary:
 
 | Command | Description |
 | --- | --- |
-| `openmeta init` | Interactive setup for GitHub, LLM, profile, target repo, and automation |
+| `openmeta init` | Initialize OpenMeta CLI configuration |
 | `openmeta agent` | Run the autonomous contribution workflow |
-| `openmeta agent --headless` | Execute unattended with saved defaults |
-| `openmeta agent --run-checks` | Run detected baseline validation commands |
+| `openmeta agent --headless` | Run unattended using saved automation defaults |
+| `openmeta agent --run-checks` | Execute detected baseline validation commands |
 | `openmeta daily` | Compatibility alias for `agent` |
-| `openmeta scout --limit <count>` | Show ranked contribution opportunities |
+| `openmeta scout --limit <count>` | Rank the highest-value contribution opportunities |
 | `openmeta inbox` | Show drafted contribution opportunities |
 | `openmeta pow` | Show proof-of-work history |
 | `openmeta automation status` | Show automation state |
-| `openmeta automation enable` | Enable daily unattended automation |
-| `openmeta automation disable` | Disable daily unattended automation |
+| `openmeta automation enable` | Enable unattended daily automation using saved settings |
+| `openmeta automation disable` | Disable unattended daily automation and remove the system scheduler |
 | `openmeta config view` | Show current configuration |
-| `openmeta config set <key> <value>` | Update a config value |
-| `openmeta config reset` | Reset configuration |
+| `openmeta config set <key> <value>` | Set a configuration value |
+| `openmeta config reset` | Reset configuration to defaults |
 
 ## Local Paths
 

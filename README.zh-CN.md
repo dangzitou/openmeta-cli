@@ -227,20 +227,20 @@ bun run ./src/cli.ts config view
 
 | 命令 | 说明 |
 | --- | --- |
-| `openmeta init` | 交互式初始化 GitHub、LLM、画像、目标仓库和自动化配置 |
+| `openmeta init` | 初始化 OpenMeta CLI 配置 |
 | `openmeta agent` | 运行自治贡献主流程 |
-| `openmeta agent --headless` | 使用已保存默认配置进行无人值守执行 |
+| `openmeta agent --headless` | 使用已保存的自动化默认配置进行无人值守执行 |
 | `openmeta agent --run-checks` | 执行检测到的基础校验命令 |
 | `openmeta daily` | `agent` 的兼容别名 |
-| `openmeta scout --limit <count>` | 查看机会排序结果 |
+| `openmeta scout --limit <count>` | 对高价值贡献机会进行排序展示 |
 | `openmeta inbox` | 查看已起草的贡献机会 |
 | `openmeta pow` | 查看 proof-of-work 历史 |
 | `openmeta automation status` | 查看自动化状态 |
-| `openmeta automation enable` | 启用每日自动化 |
-| `openmeta automation disable` | 关闭每日自动化 |
+| `openmeta automation enable` | 使用已保存配置启用每日无人值守自动化 |
+| `openmeta automation disable` | 关闭每日无人值守自动化并移除系统调度器 |
 | `openmeta config view` | 查看当前配置 |
-| `openmeta config set <key> <value>` | 修改配置项 |
-| `openmeta config reset` | 重置配置 |
+| `openmeta config set <key> <value>` | 设置配置项 |
+| `openmeta config reset` | 重置配置为默认值 |
 
 ## 本地路径
 
