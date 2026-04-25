@@ -22,6 +22,13 @@ import type {
 } from '../types/index.js';
 import { logger } from '../infra/logger.js';
 import {
+  LLM_VALIDATION_FALLBACK_HINTS,
+  LLM_VALIDATION_PROMPT,
+  LLM_VALIDATION_REQUEST,
+  LLM_VALIDATION_STATUS_HINTS,
+  LLM_VALIDATION_TIMEOUT_MS,
+} from './llm.constants.js';
+import {
   CODE_CHANGE_PROMPT,
   CODE_CHANGE_REPAIR_PROMPT,
   fillPrompt,
@@ -37,6 +44,7 @@ import {
 export class LLMService {
   private client: OpenAI | null = null;
   private modelName: string = 'gpt-4o-mini';
+  private lastValidationError: string | null = null;
 
   initialize(apiKey: string, baseUrl: string, modelName?: string): void {
     this.client = new OpenAI({
@@ -54,18 +62,33 @@ export class LLMService {
     }
 
     try {
-      await this.client.chat.completions.create({
-        model: this.modelName,
-        messages: [{ role: 'user', content: 'hi' }],
-        max_tokens: 5,
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), LLM_VALIDATION_TIMEOUT_MS);
+
+      try {
+        await this.client.chat.completions.create({
+          model: this.modelName,
+          messages: [{ role: 'user', content: LLM_VALIDATION_PROMPT }],
+          ...LLM_VALIDATION_REQUEST,
+        }, {
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+      this.lastValidationError = null;
       logger.success('LLM API connection validated');
       return true;
     } catch (error) {
+      this.lastValidationError = this.describeValidationError(error);
       logger.warn('LLM API connection check failed.');
       logger.debug('LLM API connection check failed', error);
       return false;
     }
+  }
+
+  getLastValidationError(): string | null {
+    return this.lastValidationError;
   }
 
   async scoreIssues(
@@ -411,6 +434,69 @@ Repo Stars: ${i.repoStars}`
       'Recent Issue Outcomes:',
       ...recentOutcomes,
     ].join('\n');
+  }
+
+  private describeValidationError(error: unknown): string {
+    if (this.isAbortError(error)) {
+      return LLM_VALIDATION_FALLBACK_HINTS.timeout;
+    }
+
+    const status = this.extractStatusCode(error);
+    if (status !== null) {
+      return LLM_VALIDATION_STATUS_HINTS[status] ?? `The provider returned HTTP ${status} during validation.`;
+    }
+
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+
+    if (message.includes('timeout') || message.includes('timed out')) {
+      return LLM_VALIDATION_FALLBACK_HINTS.timeout;
+    }
+
+    if (message.includes('abort')) {
+      return LLM_VALIDATION_FALLBACK_HINTS.aborted;
+    }
+
+    if (
+      message.includes('network') ||
+      message.includes('enotfound') ||
+      message.includes('econnrefused') ||
+      message.includes('econnreset') ||
+      message.includes('fetch failed')
+    ) {
+      return LLM_VALIDATION_FALLBACK_HINTS.network;
+    }
+
+    return LLM_VALIDATION_FALLBACK_HINTS.unknown;
+  }
+
+  private extractStatusCode(error: unknown): number | null {
+    if (typeof error !== 'object' || error === null) {
+      return null;
+    }
+
+    if ('status' in error && typeof error.status === 'number') {
+      return error.status;
+    }
+
+    if ('code' in error && typeof error.code === 'number') {
+      return error.code;
+    }
+
+    if (
+      'response' in error &&
+      typeof error.response === 'object' &&
+      error.response !== null &&
+      'status' in error.response &&
+      typeof error.response.status === 'number'
+    ) {
+      return error.response.status;
+    }
+
+    return null;
+  }
+
+  private isAbortError(error: unknown): boolean {
+    return error instanceof Error && (error.name === 'AbortError' || error.message.toLowerCase().includes('aborted'));
   }
 
 }

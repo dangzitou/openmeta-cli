@@ -94,7 +94,7 @@ export class ConfigOrchestrator {
   async set(key: string, value: string): Promise<void> {
     const config = await configService.get();
     const validPaths = ['userProfile.techStack', 'userProfile.proficiency', 'userProfile.focusAreas',
-                       'github.username', 'github.targetRepoPath', 'llm.apiBaseUrl', 'llm.modelName',
+                       'github.username', 'github.targetRepoPath', 'llm.provider', 'llm.apiBaseUrl', 'llm.modelName',
                        'automation.enabled', 'automation.scheduleTime', 'automation.contentType',
                        'automation.minMatchScore', 'automation.skipIfAlreadyGeneratedToday',
                        'commitTemplate'];
@@ -128,6 +128,11 @@ export class ConfigOrchestrator {
       updated = await configService.update({ github: { ...config.github, username: value } });
     } else if (key === 'github.targetRepoPath') {
       updated = await configService.update({ github: { ...config.github, targetRepoPath: value } });
+    } else if (key === 'llm.provider') {
+      if (value !== 'openai' && value !== 'minimax' && value !== 'custom') {
+        throw new Error('llm.provider must be "openai", "minimax", or "custom".');
+      }
+      updated = await configService.update({ llm: { ...config.llm, provider: value as 'openai' | 'minimax' | 'custom' } });
     } else if (key === 'llm.apiBaseUrl') {
       updated = await configService.update({ llm: { ...config.llm, apiBaseUrl: value } });
     } else if (key === 'llm.modelName') {
@@ -272,6 +277,8 @@ export class ConfigOrchestrator {
         return config.github.username || '(not set)';
       case 'github.targetRepoPath':
         return config.github.targetRepoPath || 'Auto-managed private repository';
+      case 'llm.provider':
+        return config.llm.provider;
       case 'llm.apiBaseUrl':
         return config.llm.apiBaseUrl;
       case 'llm.modelName':

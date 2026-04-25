@@ -10,6 +10,8 @@ interface LLMProviderOption {
   value: string;
   baseUrl: string;
   models: Array<{ name: string; value: string }>;
+  allowCustomModel?: boolean;
+  allowCustomBaseUrl?: boolean;
 }
 
 const LLM_PROVIDERS: LLMProviderOption[] = [
@@ -33,6 +35,14 @@ const LLM_PROVIDERS: LLMProviderOption[] = [
       { name: 'MiniMax-M2.1', value: 'MiniMax-M2.1' },
       { name: 'MiniMax-M2', value: 'MiniMax-M2' },
     ],
+  },
+  {
+    name: 'Custom (OpenAI-compatible)',
+    value: 'custom',
+    baseUrl: '',
+    models: [],
+    allowCustomModel: true,
+    allowCustomBaseUrl: true,
   },
 ];
 
@@ -163,17 +173,18 @@ export class InitOrchestrator {
     let providerValue = '';
     let selectedProvider: LLMProviderOption | undefined;
     let modelValue = '';
+    let apiBaseUrl = '';
     let apiKey = '';
     let llmValid = false;
 
     while (!llmValid) {
       providerValue = await selectPrompt<string>({
         message: 'Select LLM provider:',
-        default: config.llm.provider,
+        default: this.getProviderDefault(config.llm.provider),
         choices: LLM_PROVIDERS.map(provider => ({
           name: provider.name,
           value: provider.value,
-          description: provider.baseUrl,
+          description: provider.baseUrl || 'Bring your own compatible endpoint',
         })),
       });
 
@@ -182,21 +193,28 @@ export class InitOrchestrator {
         throw new Error(`Provider not found: ${providerValue}`);
       }
 
-      modelValue = await selectPrompt<string>({
-        message: 'Select model:',
-        default: config.llm.modelName,
-        choices: selectedProvider.models.map(model => ({
-          name: model.name,
-          value: model.value,
-        })),
-      });
+      apiBaseUrl = selectedProvider.allowCustomBaseUrl
+        ? await this.promptApiBaseUrl(config.llm.apiBaseUrl)
+        : selectedProvider.baseUrl;
+
+      modelValue = selectedProvider.allowCustomModel
+        ? await this.promptModelName(config.llm.modelName)
+        : await selectPrompt<string>({
+          message: 'Select model:',
+          default: config.llm.modelName,
+          choices: selectedProvider.models.map(model => ({
+            name: model.name,
+            value: model.value,
+          })),
+        });
 
       apiKey = await this.promptAPIKey();
 
-      llmService.initialize(apiKey, selectedProvider.baseUrl, modelValue);
+      llmService.initialize(apiKey, apiBaseUrl, modelValue);
       llmValid = await this.validateLlmConnection();
 
       if (!llmValid) {
+        const validationDetail = llmService.getLastValidationError();
         this.renderStep('llm', completedSteps, 'Provider validation needs to be retried.', true);
         ui.callout({
           label: 'OpenMeta Init',
@@ -205,6 +223,7 @@ export class InitOrchestrator {
           lines: [
             'Check provider endpoint, model name, and API key.',
             'If you use a proxy or compatible endpoint, confirm the base URL is correct.',
+            ...(validationDetail ? [`Provider detail: ${validationDetail}`] : []),
           ],
           tone: 'warning',
         });
@@ -233,7 +252,7 @@ export class InitOrchestrator {
     ui.keyValues('LLM provider connected', [
       { label: 'Provider', value: selectedProvider!.name, tone: 'success' },
       { label: 'Model', value: modelValue, tone: 'success' },
-      { label: 'Endpoint', value: selectedProvider!.baseUrl, tone: 'info' },
+      { label: 'Endpoint', value: apiBaseUrl, tone: 'info' },
       { label: 'API key', value: ui.maskSecret(apiKey), tone: 'success' },
     ]);
 
@@ -391,8 +410,8 @@ export class InitOrchestrator {
         targetRepoPath: targetRepoPath || undefined,
       },
       llm: {
-        provider: providerValue as 'openai' | 'minimax',
-        apiBaseUrl: selectedProvider!.baseUrl,
+        provider: providerValue as 'openai' | 'minimax' | 'custom',
+        apiBaseUrl,
         apiKey,
         modelName: modelValue,
       },
@@ -476,6 +495,36 @@ export class InitOrchestrator {
     return apiKey.trim();
   }
 
+  private async promptApiBaseUrl(defaultValue: string): Promise<string> {
+    const { apiBaseUrl } = await prompt<{ apiBaseUrl: string }>([
+      {
+        type: 'input',
+        name: 'apiBaseUrl',
+        message: 'Enter your OpenAI-compatible API base URL:',
+        default: defaultValue || 'https://api.openai.com/v1',
+        filter: (input: string) => input.trim(),
+        validate: (input: string) => input.trim().length > 0 || 'API base URL is required.',
+      },
+    ]);
+
+    return apiBaseUrl.trim();
+  }
+
+  private async promptModelName(defaultValue: string): Promise<string> {
+    const { modelName } = await prompt<{ modelName: string }>([
+      {
+        type: 'input',
+        name: 'modelName',
+        message: 'Enter your model name:',
+        default: defaultValue || 'gpt-4o-mini',
+        filter: (input: string) => input.trim(),
+        validate: (input: string) => input.trim().length > 0 || 'Model name is required.',
+      },
+    ]);
+
+    return modelName.trim();
+  }
+
   private async promptUsername(): Promise<string> {
     const { username } = await prompt<{ username: string }>([
       {
@@ -487,6 +536,12 @@ export class InitOrchestrator {
       },
     ]);
     return username.trim();
+  }
+
+  private getProviderDefault(provider: AppConfig['llm']['provider']): string {
+    return LLM_PROVIDERS.some((option) => option.value === provider)
+      ? provider
+      : 'custom';
   }
 
   private formatAutomationSummary(config: AppConfig, result: SchedulerSyncResult): string {
