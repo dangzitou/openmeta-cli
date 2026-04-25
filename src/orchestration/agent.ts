@@ -7,6 +7,7 @@ import type { PatchDraft, PullRequestDraft } from '../contracts/index.js';
 import type {
   AppConfig,
   ContributionAgentResult,
+  GitHubIssue,
   RankedIssue,
   RepoWorkspaceContext,
   TestResult,
@@ -76,6 +77,34 @@ interface ConcretePatchResult {
 
 type AgentStageId = 'scout' | 'select' | 'prepare' | 'draft' | 'validate' | 'pr' | 'publish';
 const ARTIFACT_PUBLISH_BRANCH = 'openmeta-artifacts';
+const ISSUE_SCORING_BATCH_SIZE = 20;
+const MAX_ISSUES_FOR_LLM_SCORING = 80;
+
+const PROFILE_TERM_ALIASES: Record<string, string[]> = {
+  'typescript': ['ts', 'tsx'],
+  'javascript': ['js', 'jsx'],
+  'node js': ['node', 'nodejs', 'npm'],
+  'react': ['jsx', 'tsx', 'component', 'hooks'],
+  'vue': ['vuejs', 'component'],
+  'python': ['py', 'pytest'],
+  'django': ['python', 'orm'],
+  'fastapi': ['python', 'api'],
+  'go': ['golang'],
+  'rust': ['cargo'],
+  'docker': ['container', 'compose'],
+  'c plus plus': ['cpp'],
+};
+
+const FOCUS_AREA_TERMS: Record<string, string[]> = {
+  'web-dev': ['web', 'frontend', 'browser', 'react', 'vue', 'css', 'accessibility'],
+  'backend': ['backend', 'api', 'server', 'database', 'auth'],
+  'devops': ['ci', 'deploy', 'docker', 'kubernetes', 'workflow'],
+  'ai-ml': ['ai', 'ml', 'model', 'prompt', 'embedding', 'inference'],
+  'mobile': ['mobile', 'ios', 'android', 'swift', 'kotlin', 'react native'],
+  'security': ['security', 'auth', 'permission', 'vulnerability', 'encryption'],
+  'data': ['data', 'sql', 'pipeline', 'analytics', 'warehouse'],
+  'open-source': ['docs', 'contributor', 'cli', 'good first issue', 'help wanted'],
+};
 
 const AGENT_STAGES: Array<{ id: AgentStageId; label: string; description: string }> = [
   {
@@ -760,7 +789,8 @@ export class AgentOrchestrator {
 
   private async loadRankedIssues(config: AppConfig, options: { refresh?: boolean } = {}): Promise<RankedIssue[]> {
     const issues = await githubService.fetchTrendingIssues({ refresh: options.refresh });
-    const matched = await this.scoreIssuesInBatches(config.userProfile, issues);
+    const rankedCandidates = this.rankIssuesForProfile(issues, config.userProfile);
+    const matched = await this.scoreIssuesInBatches(config.userProfile, rankedCandidates);
     return opportunityService.rankIssues(matched);
   }
 
@@ -768,22 +798,137 @@ export class AgentOrchestrator {
     userProfile: AppConfig['userProfile'],
     issues: Awaited<ReturnType<typeof githubService.fetchTrendingIssues>>,
   ) {
-    const batchSize = 20;
     const matches = [];
+    const issuesToScore = issues.slice(0, MAX_ISSUES_FOR_LLM_SCORING);
 
-    for (let start = 0; start < Math.min(issues.length, 80); start += batchSize) {
-      const batch = issues.slice(start, start + batchSize);
+    for (let start = 0; start < issuesToScore.length; start += ISSUE_SCORING_BATCH_SIZE) {
+      const batch = issuesToScore.slice(start, start + ISSUE_SCORING_BATCH_SIZE);
       const scoredBatch = await llmService.scoreIssues(userProfile, batch);
       if (scoredBatch.status !== 'success') {
         logger.warn('Issue scoring returned advisory results that require review. Continuing with the parsed matches only.');
       }
       matches.push(...scoredBatch.data);
-      if (matches.length >= 20) {
-        break;
-      }
     }
 
     return matches;
+  }
+
+  private rankIssuesForProfile(
+    issues: GitHubIssue[],
+    userProfile: AppConfig['userProfile'],
+  ): GitHubIssue[] {
+    return [...issues].sort((left, right) => {
+      const scoreDelta = this.scoreIssueForProfile(right, userProfile) - this.scoreIssueForProfile(left, userProfile);
+      if (scoreDelta !== 0) {
+        return scoreDelta;
+      }
+
+      return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+    });
+  }
+
+  private scoreIssueForProfile(issue: GitHubIssue, userProfile: AppConfig['userProfile']): number {
+    const profileTerms = this.getProfileTerms(userProfile);
+    const title = this.normalizeSearchText(issue.title);
+    const body = this.normalizeSearchText(issue.body);
+    const repoDescription = this.normalizeSearchText(issue.repoDescription);
+    const repoName = this.normalizeSearchText(`${issue.repoFullName} ${issue.repoName}`);
+    const labels = this.normalizeSearchText(issue.labels.join(' '));
+    let score = 0;
+
+    for (const term of profileTerms) {
+      if (title.includes(term)) {
+        score += 18;
+      }
+      if (labels.includes(term)) {
+        score += 12;
+      }
+      if (repoDescription.includes(term)) {
+        score += 8;
+      }
+      if (repoName.includes(term)) {
+        score += 5;
+      }
+      if (body.includes(term)) {
+        score += 4;
+      }
+    }
+
+    if (labels.includes('good first issue')) {
+      score += 14;
+    }
+    if (labels.includes('help wanted')) {
+      score += 9;
+    }
+    if (this.hasActionableBodySignals(issue)) {
+      score += 10;
+    }
+    if (issue.body.trim().length >= 120) {
+      score += 6;
+    }
+    if (/\b(blocked|needs info|needs information|duplicate|invalid|question|wontfix)\b/.test(labels)) {
+      score -= 28;
+    }
+
+    score += this.computeDiscoveryFreshnessBoost(issue.updatedAt);
+    score += Math.min(12, Math.log10(issue.repoStars + 10) * 5);
+
+    return score;
+  }
+
+  private getProfileTerms(userProfile: AppConfig['userProfile']): string[] {
+    const terms = new Set<string>();
+
+    for (const item of [...userProfile.techStack, ...userProfile.focusAreas]) {
+      const normalized = this.normalizeSearchText(item);
+      if (normalized) {
+        terms.add(normalized);
+      }
+
+      for (const alias of PROFILE_TERM_ALIASES[normalized] ?? []) {
+        const normalizedAlias = this.normalizeSearchText(alias);
+        if (normalizedAlias) {
+          terms.add(normalizedAlias);
+        }
+      }
+    }
+
+    for (const focusArea of userProfile.focusAreas) {
+      for (const term of FOCUS_AREA_TERMS[focusArea] ?? []) {
+        const normalized = this.normalizeSearchText(term);
+        if (normalized) {
+          terms.add(normalized);
+        }
+      }
+    }
+
+    return [...terms].filter((term) => term.length >= 2);
+  }
+
+  private normalizeSearchText(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/\+\+/g, ' plus plus')
+      .replace(/[#.]/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private hasActionableBodySignals(issue: GitHubIssue): boolean {
+    const content = `${issue.title}\n${issue.body}`;
+    return /(?:^|[\s`'"])(?:[\w.-]+\/)+[\w.-]+\.(?:ts|tsx|js|jsx|py|go|rs|java|kt|json|md|css|scss)/m.test(content) ||
+      /\b(repro|steps? to reproduce|expected|actual|acceptance criteria|stack trace)\b/i.test(content);
+  }
+
+  private computeDiscoveryFreshnessBoost(updatedAt: string): number {
+    const ageHours = (Date.now() - new Date(updatedAt).getTime()) / (1000 * 60 * 60);
+
+    if (ageHours <= 24) return 12;
+    if (ageHours <= 72) return 10;
+    if (ageHours <= 7 * 24) return 7;
+    if (ageHours <= 14 * 24) return 4;
+    return 0;
   }
 
   private selectIssueForAutomation(issues: RankedIssue[], minOverallScore: number): RankedIssue | undefined {
