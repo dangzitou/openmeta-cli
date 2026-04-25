@@ -401,6 +401,10 @@ function maskSecret(secret?: string): string {
   return `***${secret.slice(-4)}`;
 }
 
+function shouldUseCelebrationWordmark(commandName: string): boolean {
+  return commandName === 'OpenMeta Init';
+}
+
 function completionCopy(commandName: string): Pick<CardOptions, 'title' | 'subtitle' | 'lines' | 'tone'> {
   switch (commandName) {
     case 'OpenMeta Agent':
@@ -537,7 +541,17 @@ export const ui = {
   },
 
   commandCompleted(commandName: string): void {
-    printCelebration(capabilities, completionCopy(commandName));
+    const completion = completionCopy(commandName);
+
+    if (shouldUseCelebrationWordmark(commandName)) {
+      printCelebration(capabilities, completion);
+      return;
+    }
+
+    printCard(capabilities, {
+      ...completion,
+      label: commandName,
+    });
   },
 
   async task<T>(options: TaskOptions, task: () => Promise<T>): Promise<T> {
