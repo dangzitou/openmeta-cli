@@ -1,6 +1,11 @@
 # OpenMeta CLI
 
 <p align="center">
+  <a href="./README.md">English</a> |
+  <a href="./README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
   <strong>Turn open-source ambition into a repeatable contribution system.</strong>
 </p>
 
@@ -23,9 +28,6 @@
   <img src="https://img.shields.io/badge/llm-OpenAI%20Compatible-10A37F?style=flat-square" alt="OpenAI Compatible" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License" />
 </p>
-
-> Chinese note:
-> OpenMeta CLI focuses on the full contribution loop, not just issue discovery. It scores opportunities, prepares repository context, drafts patch and PR materials, preserves repo memory, and supports unattended local automation.
 
 ## Overview
 
