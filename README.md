@@ -169,17 +169,24 @@ Install dependencies:
 bun install
 ```
 
-Run from source:
-
-```bash
-bun run ./src/cli.ts --help
-```
-
 Build the CLI:
 
 ```bash
 bun run build
-./bin/openmeta.js --help
+```
+
+Create a global `openmeta` command on Linux or macOS:
+
+```bash
+ln -sf "$(pwd)/bin/openmeta.js" /usr/local/bin/openmeta
+chmod +x ./bin/openmeta.js
+hash -r
+```
+
+Verify the installation:
+
+```bash
+openmeta --help
 ```
 
 ## Quick Start
@@ -187,35 +194,35 @@ bun run build
 Initialize configuration:
 
 ```bash
-bun run ./src/cli.ts init
+openmeta init
 ```
 
 Run the autonomous contribution workflow:
 
 ```bash
-bun run ./src/cli.ts agent
+openmeta agent
 ```
 
 Scout only:
 
 ```bash
-bun run ./src/cli.ts scout --limit 10
+openmeta scout --limit 10
 ```
 
 Inspect durable artifacts:
 
 ```bash
-bun run ./src/cli.ts inbox
-bun run ./src/cli.ts pow
+openmeta inbox
+openmeta pow
 ```
 
 Review configuration:
 
 ```bash
-bun run ./src/cli.ts config view
+openmeta config view
 ```
 
-If you already built the binary:
+If you prefer not to create a global symlink, you can still run the built file directly:
 
 ```bash
 ./bin/openmeta.js init
