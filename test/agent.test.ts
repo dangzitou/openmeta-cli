@@ -22,6 +22,10 @@ interface AgentInternals {
     issues: Array<ReturnType<typeof createRankedIssue>>,
     minOverallScore: number,
   ): ReturnType<typeof createRankedIssue> | undefined;
+  diversifyScoutIssues(
+    issues: Array<ReturnType<typeof createRankedIssue>>,
+    limit: number,
+  ): Array<ReturnType<typeof createRankedIssue>>;
   rankIssuesForProfile(
     issues: Array<ReturnType<typeof createIssue>>,
     userProfile: {
@@ -38,6 +42,14 @@ interface AgentInternals {
     },
     issues: Array<ReturnType<typeof createIssue>>,
   ): Promise<Array<ReturnType<typeof createMatchedIssue>>>;
+  buildLocalIssueMatches(
+    issues: Array<ReturnType<typeof createIssue>>,
+    userProfile: {
+      techStack: string[];
+      proficiency: 'beginner' | 'intermediate' | 'advanced';
+      focusAreas: string[];
+    },
+  ): Array<ReturnType<typeof createMatchedIssue>>;
   buildImplementationWorkspace(
     workspace: ReturnType<typeof createWorkspace>,
     patchDraft: ReturnType<typeof createPatchDraft>,
@@ -118,6 +130,24 @@ describe('AgentOrchestrator draft PR parsing', () => {
     expect(selected?.repoFullName).toBe('acme/high');
   });
 
+  test('diversifies scout display across repositories before filling repeats', () => {
+    const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+    const issues = [
+      createRankedIssue({ repoFullName: 'acme/a', repoName: 'a', number: 1 }),
+      createRankedIssue({ repoFullName: 'acme/a', repoName: 'a', number: 2 }),
+      createRankedIssue({ repoFullName: 'acme/b', repoName: 'b', number: 3 }),
+      createRankedIssue({ repoFullName: 'acme/c', repoName: 'c', number: 4 }),
+    ];
+
+    const visible = orchestrator.diversifyScoutIssues(issues, 3);
+
+    expect(visible.map((issue) => `${issue.repoFullName}#${issue.number}`)).toEqual([
+      'acme/a#1',
+      'acme/b#3',
+      'acme/c#4',
+    ]);
+  });
+
   test('pre-ranks issue discovery candidates against the saved profile', () => {
     const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
     const ranked = orchestrator.rankIssuesForProfile([
@@ -185,6 +215,33 @@ describe('AgentOrchestrator draft PR parsing', () => {
     } finally {
       llmService.scoreIssues = originalScoreIssues;
     }
+  });
+
+  test('builds local heuristic issue matches without LLM scoring', () => {
+    const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+    const matches = orchestrator.buildLocalIssueMatches([
+      createIssue({
+        repoFullName: 'acme/react-ui',
+        repoName: 'react-ui',
+        number: 12,
+        title: 'Fix React focus trap in menu',
+        body: 'The bug is in `src/Menu.tsx`. Steps to reproduce: tab through the menu. Expected focus stays inside.',
+        labels: ['good first issue', 'accessibility'],
+        repoDescription: 'TypeScript React component library',
+        repoStars: 420,
+      }),
+    ], {
+      techStack: ['TypeScript', 'React'],
+      proficiency: 'intermediate',
+      focusAreas: ['web-dev'],
+    });
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.matchScore).toBeGreaterThan(60);
+    expect(matches[0]?.analysis.techRequirements).toContain('TypeScript');
+    expect(matches[0]?.analysis.techRequirements).toContain('React');
+    expect(matches[0]?.analysis.estimatedWorkload).toBe('1-3 hours');
+    expect(matches[0]?.analysis.solutionSuggestion).toContain('Local scout mode');
   });
 
   test('loads patch draft target files into implementation context', () => {

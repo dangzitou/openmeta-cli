@@ -204,6 +204,7 @@ bun run ./src/cli.ts agent
 
 # 3. 只看机会排名
 bun run ./src/cli.ts scout --limit 10
+bun run ./src/cli.ts scout --local --limit 10
 
 # 4. 查看贡献沉淀
 bun run ./src/cli.ts inbox
@@ -223,6 +224,7 @@ bun run ./src/cli.ts doctor
 ./bin/openmeta.js init
 ./bin/openmeta.js agent --run-checks
 ./bin/openmeta.js automation status
+./bin/openmeta.js scout --local --limit 10
 ```
 
 ### 命令一览
@@ -239,6 +241,7 @@ bun run ./src/cli.ts doctor
 | `openmeta daily` | `agent` 的兼容别名，支持相同运行参数 |
 | `openmeta scout --limit <count>` | 查看高价值贡献机会排名 |
 | `openmeta scout --refresh` | 强制刷新 GitHub issue discovery 缓存 |
+| `openmeta scout --local` | 使用本地启发式评分，不调用 LLM，适合模型服务暂时不可用时先筛机会 |
 | `openmeta inbox` | 查看已起草的贡献机会收件箱 |
 | `openmeta pow` | 查看贡献工作量证明记录 |
 | `openmeta automation status` | 查看自动化状态 |
@@ -486,6 +489,7 @@ bun run ./src/cli.ts agent
 
 # 3. Only scout and rank opportunities
 bun run ./src/cli.ts scout --limit 10
+bun run ./src/cli.ts scout --local --limit 10
 
 # 4. Inspect durable contribution assets
 bun run ./src/cli.ts inbox
@@ -505,6 +509,7 @@ If you already built the binary:
 ./bin/openmeta.js init
 ./bin/openmeta.js agent --run-checks
 ./bin/openmeta.js automation status
+./bin/openmeta.js scout --local --limit 10
 ```
 
 ### Command Surface
@@ -521,6 +526,7 @@ If you already built the binary:
 | `openmeta daily` | Compatibility alias for `agent` with the same runtime options |
 | `openmeta scout --limit <count>` | Show ranked contribution opportunities |
 | `openmeta scout --refresh` | Force-refresh the GitHub issue discovery cache |
+| `openmeta scout --local` | Use local heuristic scoring without calling the LLM provider |
 | `openmeta inbox` | Show drafted contribution opportunities |
 | `openmeta pow` | Show proof-of-work history |
 | `openmeta automation status` | Show automation status |

@@ -8,6 +8,7 @@ import type {
   AppConfig,
   ContributionAgentResult,
   GitHubIssue,
+  MatchedIssue,
   RankedIssue,
   RepoFileSnippet,
   RepoWorkspaceContext,
@@ -48,6 +49,7 @@ export interface AgentRunOptions {
 export interface ScoutRunOptions {
   limit?: number;
   refresh?: boolean;
+  localOnly?: boolean;
 }
 
 interface TargetRepoContext {
@@ -424,17 +426,21 @@ export class AgentOrchestrator {
   async scout(options: ScoutRunOptions | number = {}): Promise<void> {
     const limit = typeof options === 'number' ? options : options.limit ?? 10;
     const refresh = typeof options === 'number' ? false : Boolean(options.refresh);
+    const localOnly = typeof options === 'number' ? false : Boolean(options.localOnly);
     const config = await configService.get();
-    await this.validateConfig(config);
-    await this.initializeClients(config);
+    await this.validateConfig(config, { requireLlm: !localOnly });
+    await this.initializeClients(config, { validateLlm: !localOnly });
 
     ui.hero({
       label: 'OpenMeta Scout',
-      title: 'Read the field before you spend your focus',
-      subtitle: 'OpenMeta turns a noisy issue stream into a shortlist shaped by technical fit, timing, and real opening momentum.',
+      title: localOnly ? 'Read the field while the model stays offline' : 'Read the field before you spend your focus',
+      subtitle: localOnly
+        ? 'OpenMeta will use local profile heuristics to keep scouting useful even when the LLM provider is unavailable.'
+        : 'OpenMeta turns a noisy issue stream into a shortlist shaped by technical fit, timing, and real opening momentum.',
       lines: [
         `Saved threshold reference: ${config.automation.minMatchScore}/100.`,
         refresh ? 'This scout run will ignore the local GitHub issue cache.' : 'This scout run may reuse the short local GitHub issue cache.',
+        localOnly ? 'LLM validation and model scoring are skipped for this run.' : 'LLM scoring will refine the local candidate shortlist.',
       ],
     });
 
@@ -443,7 +449,7 @@ export class AgentOrchestrator {
       doneMessage: 'Contribution opportunities scored',
       failedMessage: 'Contribution opportunity scoring failed',
       tone: 'info',
-    }, async () => this.loadRankedIssues(config, { refresh }));
+    }, async () => this.loadRankedIssues(config, { refresh, localOnly }));
     if (rankedIssues.length === 0) {
       ui.emptyState('OpenMeta Scout', 'No issues found', 'No issues met the current scoring thresholds.');
       return;
@@ -455,7 +461,7 @@ export class AgentOrchestrator {
       { label: 'Top score', value: String(rankedIssues[0]?.opportunity.overallScore || 0), tone: 'accent' },
       { label: 'Profile threshold', value: `${config.automation.minMatchScore}`, tone: 'info' },
     ]);
-    this.renderOpportunityList('Ranked opportunities', rankedIssues.slice(0, limit));
+    this.renderOpportunityList('Ranked opportunities', this.diversifyScoutIssues(rankedIssues, limit));
   }
 
   async showInbox(): Promise<void> {
@@ -742,17 +748,26 @@ export class AgentOrchestrator {
     ]);
   }
 
-  private async validateConfig(config: AppConfig): Promise<void> {
+  private async validateConfig(
+    config: AppConfig,
+    options: { requireLlm?: boolean } = {},
+  ): Promise<void> {
+    const requireLlm = options.requireLlm ?? true;
+
     if (!config.github.pat || !config.github.username) {
       throw new Error('GitHub configuration is incomplete. Please run "openmeta init" first.');
     }
 
-    if (!config.llm.apiKey) {
+    if (requireLlm && !config.llm.apiKey) {
       throw new Error('LLM API configuration is incomplete. Please run "openmeta init" first.');
     }
   }
 
-  private async initializeClients(config: AppConfig): Promise<void> {
+  private async initializeClients(
+    config: AppConfig,
+    options: { validateLlm?: boolean } = {},
+  ): Promise<void> {
+    const validateLlm = options.validateLlm ?? true;
     githubService.initialize(config.github.pat, config.github.username);
     const ghValid = await ui.task({
       title: 'Validating GitHub access',
@@ -771,13 +786,11 @@ export class AgentOrchestrator {
     }
 
     this.octokit = new Octokit({ auth: config.github.pat });
-    llmService.initialize(
-      config.llm.apiKey,
-      config.llm.apiBaseUrl,
-      config.llm.modelName,
-      config.llm.apiHeaders,
-      config.llm.provider,
-    );
+    if (!validateLlm) {
+      return;
+    }
+
+    llmService.initialize(config.llm.apiKey, config.llm.apiBaseUrl, config.llm.modelName, config.llm.apiHeaders, config.llm.provider);
     const llmValid = await ui.task({
       title: 'Validating LLM provider',
       doneMessage: 'LLM provider verified',
@@ -796,11 +809,36 @@ export class AgentOrchestrator {
     }
   }
 
-  private async loadRankedIssues(config: AppConfig, options: { refresh?: boolean } = {}): Promise<RankedIssue[]> {
+  private async loadRankedIssues(config: AppConfig, options: { refresh?: boolean; localOnly?: boolean } = {}): Promise<RankedIssue[]> {
     const issues = await githubService.fetchTrendingIssues({ refresh: options.refresh });
     const rankedCandidates = this.rankIssuesForProfile(issues, config.userProfile);
+    if (options.localOnly) {
+      return opportunityService.rankIssues(this.buildLocalIssueMatches(rankedCandidates, config.userProfile));
+    }
+
     const matched = await this.scoreIssuesInBatches(config.userProfile, rankedCandidates);
     return opportunityService.rankIssues(matched);
+  }
+
+  private buildLocalIssueMatches(
+    issues: GitHubIssue[],
+    userProfile: AppConfig['userProfile'],
+  ): MatchedIssue[] {
+    return issues.slice(0, MAX_ISSUES_FOR_LLM_SCORING).map((issue) => {
+      const matchScore = this.clampScore(this.scoreIssueForProfile(issue, userProfile));
+      const techRequirements = this.inferLocalTechRequirements(issue, userProfile);
+
+      return {
+        ...issue,
+        matchScore,
+        analysis: {
+          coreDemand: issue.title,
+          techRequirements,
+          solutionSuggestion: 'Local scout mode can shortlist this issue, then run "openmeta agent" when the LLM provider is healthy to draft a concrete patch plan.',
+          estimatedWorkload: this.estimateLocalWorkload(issue),
+        },
+      };
+    });
   }
 
   private async scoreIssuesInBatches(
@@ -940,8 +978,98 @@ export class AgentOrchestrator {
     return 0;
   }
 
+  private inferLocalTechRequirements(issue: GitHubIssue, userProfile: AppConfig['userProfile']): string[] {
+    const searchable = this.normalizeSearchText([
+      issue.repoFullName,
+      issue.repoDescription,
+      issue.title,
+      issue.body,
+      issue.labels.join(' '),
+    ].join(' '));
+    const inferred = new Set<string>();
+
+    for (const item of userProfile.techStack) {
+      const normalized = this.normalizeSearchText(item);
+      const aliases = [normalized, ...(PROFILE_TERM_ALIASES[normalized] ?? []).map(alias => this.normalizeSearchText(alias))];
+      if (aliases.some(alias => alias && searchable.includes(alias))) {
+        inferred.add(item);
+      }
+    }
+
+    if (/\btsx?|typescript\b/.test(searchable)) inferred.add('TypeScript');
+    if (/\bjsx?|javascript\b/.test(searchable)) inferred.add('JavaScript');
+    if (/\breact|hooks?|component\b/.test(searchable)) inferred.add('React');
+    if (/\bnode|npm|bun\b/.test(searchable)) inferred.add('Node.js');
+    if (/\bcss|scss|accessibility|a11y|browser\b/.test(searchable)) inferred.add('Web');
+    if (/\bpython|pytest|django|fastapi\b/.test(searchable)) inferred.add('Python');
+    if (/\bgo|golang\b/.test(searchable)) inferred.add('Go');
+    if (/\brust|cargo\b/.test(searchable)) inferred.add('Rust');
+
+    return [...inferred].slice(0, 6);
+  }
+
+  private estimateLocalWorkload(issue: GitHubIssue): string {
+    const bodyLength = issue.body.trim().length;
+    const searchable = `${issue.title}\n${issue.body}`;
+
+    if (/\b(rewrite|migration|architecture|breaking change|refactor all|entire)\b/i.test(searchable)) {
+      return 'multi-session';
+    }
+
+    if (this.hasActionableBodySignals(issue) || bodyLength >= 500) {
+      return '1-3 hours';
+    }
+
+    if (bodyLength >= 120) {
+      return 'under 2 hours';
+    }
+
+    return 'needs triage';
+  }
+
+  private clampScore(value: number): number {
+    return Math.max(0, Math.min(100, Math.round(value)));
+  }
+
   private selectIssueForAutomation(issues: RankedIssue[], minOverallScore: number): RankedIssue | undefined {
     return issues.find((issue) => issue.opportunity.overallScore >= minOverallScore);
+  }
+
+  private diversifyScoutIssues(issues: RankedIssue[], limit: number): RankedIssue[] {
+    if (limit <= 0 || issues.length <= limit) {
+      return issues.slice(0, Math.max(0, limit));
+    }
+
+    const selected: RankedIssue[] = [];
+    const selectedIds = new Set<string>();
+    const seenRepos = new Set<string>();
+
+    for (const issue of issues) {
+      if (selected.length >= limit) {
+        break;
+      }
+
+      if (seenRepos.has(issue.repoFullName)) {
+        continue;
+      }
+
+      selected.push(issue);
+      selectedIds.add(`${issue.repoFullName}#${issue.number}`);
+      seenRepos.add(issue.repoFullName);
+    }
+
+    for (const issue of issues) {
+      if (selected.length >= limit) {
+        break;
+      }
+
+      const id = `${issue.repoFullName}#${issue.number}`;
+      if (!selectedIds.has(id)) {
+        selected.push(issue);
+      }
+    }
+
+    return selected;
   }
 
   private async promptForIssue(issues: RankedIssue[]): Promise<RankedIssue> {
