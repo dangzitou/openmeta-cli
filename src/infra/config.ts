@@ -45,7 +45,7 @@ function createDefaultConfig(): AppConfig {
       apiHeaders: {},
     },
     automation: {
-      enabled: true,
+      enabled: false,
       scheduleTime: '09:00',
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       contentType: 'research_note',

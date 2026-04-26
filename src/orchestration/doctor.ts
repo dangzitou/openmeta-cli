@@ -226,7 +226,7 @@ export class DoctorOrchestrator {
         label: 'GitHub configuration',
         status: 'fail',
         summary: `Missing GitHub ${missing.join(' and ')}.`,
-        remediation: 'Run "openmeta init" or set github.username and refresh the stored token.',
+        remediation: 'Run "openmeta init" or set github.username and github.pat.',
       };
     }
 
@@ -252,7 +252,7 @@ export class DoctorOrchestrator {
         label: 'LLM configuration',
         status: 'fail',
         summary: `Missing LLM ${missing.join(', ')}.`,
-        remediation: 'Run "openmeta init" or set llm.apiBaseUrl and llm.modelName, then save an API key through init.',
+        remediation: 'Run "openmeta init" or set llm.apiBaseUrl, llm.modelName, and llm.apiKey.',
       };
     }
 

@@ -71,6 +71,7 @@ describe('stateful services', () => {
     expect(existsSync(backupPath)).toBe(true);
     expect(readFileSync(backupPath, 'utf-8')).toContain('custom-user');
     expect(resetConfig.github.username).toBe('');
+    expect(resetConfig.automation.enabled).toBe(false);
     expect(resetConfig.automation.scheduleTime).toBe('09:00');
   });
 
@@ -90,6 +91,7 @@ describe('stateful services', () => {
 
     expect(loaded.github.username).toBe('partial-user');
     expect(loaded.llm.modelName).toBe('gpt-4o-mini');
+    expect(loaded.automation.enabled).toBe(false);
     expect(loaded.automation.scheduleTime).toBe('09:00');
   });
 

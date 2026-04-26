@@ -786,7 +786,8 @@ export class AgentOrchestrator {
     }, async () => {
       const valid = await llmService.validateConnection();
       if (!valid) {
-        throw new Error('LLM validation failed');
+        const detail = llmService.getLastValidationError();
+        throw new Error(`LLM validation failed${detail ? `: ${detail}` : ''}`);
       }
       return true;
     });

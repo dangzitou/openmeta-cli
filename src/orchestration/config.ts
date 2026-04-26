@@ -17,7 +17,7 @@ export class ConfigOrchestrator {
       subtitle: 'Profile, credentials, defaults, and automation policy arranged into one readable control surface.',
       lines: [
         `Config path: ${configService.getConfigPath()}`,
-        missingRequired === 0 ? 'Critical settings are present.' : `${missingRequired} critical setting group still needs attention.`,
+        missingRequired === 0 ? 'Critical settings are present.' : `${missingRequired} critical setting group${missingRequired === 1 ? '' : 's'} still need attention.`,
       ],
       tone: missingRequired === 0 ? 'accent' : 'warning',
     });
@@ -95,7 +95,7 @@ export class ConfigOrchestrator {
   async set(key: string, value: string): Promise<void> {
     const config = await configService.get();
     const validPaths = ['userProfile.techStack', 'userProfile.proficiency', 'userProfile.focusAreas',
-                       'github.username', 'github.targetRepoPath', 'llm.provider', 'llm.apiBaseUrl', 'llm.modelName',
+                       'github.username', 'github.pat', 'github.targetRepoPath', 'llm.provider', 'llm.apiBaseUrl', 'llm.apiKey', 'llm.modelName',
                        'automation.enabled', 'automation.scheduleTime', 'automation.contentType',
                        'automation.minMatchScore', 'automation.skipIfAlreadyGeneratedToday',
                        'commitTemplate'];
@@ -127,6 +127,8 @@ export class ConfigOrchestrator {
       });
     } else if (key === 'github.username') {
       updated = await configService.update({ github: { ...config.github, username: value } });
+    } else if (key === 'github.pat') {
+      updated = await configService.update({ github: { ...config.github, pat: this.parseRequiredSecret(value, key) } });
     } else if (key === 'github.targetRepoPath') {
       updated = await configService.update({ github: { ...config.github, targetRepoPath: value } });
     } else if (key === 'llm.provider') {
@@ -136,6 +138,8 @@ export class ConfigOrchestrator {
       updated = await configService.update({ llm: { ...config.llm, provider: value as AppConfig['llm']['provider'] } });
     } else if (key === 'llm.apiBaseUrl') {
       updated = await configService.update({ llm: { ...config.llm, apiBaseUrl: value } });
+    } else if (key === 'llm.apiKey') {
+      updated = await configService.update({ llm: { ...config.llm, apiKey: this.parseRequiredSecret(value, key) } });
     } else if (key === 'llm.modelName') {
       updated = await configService.update({ llm: { ...config.llm, modelName: value } });
     } else if (key === 'automation.enabled') {
@@ -266,6 +270,14 @@ export class ConfigOrchestrator {
     throw new Error(`${key} must be a boolean value.`);
   }
 
+  private parseRequiredSecret(value: string, key: string): string {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      throw new Error(`${key} cannot be empty.`);
+    }
+    return trimmed;
+  }
+
   private describeUpdatedValue(key: string, config: AppConfig): string {
     switch (key) {
       case 'userProfile.techStack':
@@ -276,12 +288,16 @@ export class ConfigOrchestrator {
         return config.userProfile.focusAreas.join(', ') || '(not set)';
       case 'github.username':
         return config.github.username || '(not set)';
+      case 'github.pat':
+        return ui.maskSecret(config.github.pat);
       case 'github.targetRepoPath':
         return config.github.targetRepoPath || 'Auto-managed private repository';
       case 'llm.provider':
         return config.llm.provider;
       case 'llm.apiBaseUrl':
         return config.llm.apiBaseUrl;
+      case 'llm.apiKey':
+        return ui.maskSecret(config.llm.apiKey);
       case 'llm.modelName':
         return config.llm.modelName;
       case 'automation.enabled':
