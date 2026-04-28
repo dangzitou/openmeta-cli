@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { Octokit } from '@octokit/rest';
@@ -7,8 +7,6 @@ import type { PatchDraft, PullRequestDraft } from '../contracts/index.js';
 import type {
   AppConfig,
   ContributionAgentResult,
-  GitHubIssue,
-  MatchedIssue,
   RankedIssue,
   RepoFileSnippet,
   RepoWorkspaceContext,
@@ -27,12 +25,13 @@ import {
 } from '../infra/index.js';
 import {
   contentService,
+  contributionPrService,
   gitService,
   githubService,
   inboxService,
+  issueRankingService,
   llmService,
   memoryService,
-  opportunityService,
   proofOfWorkService,
   workspaceService,
 } from '../services/index.js';
@@ -59,11 +58,6 @@ interface TargetRepoContext {
   defaultBranch: string;
 }
 
-interface DraftPullRequest {
-  title: string;
-  body: string;
-}
-
 interface ContributionPullRequestResult {
   branchName?: string;
   url?: string;
@@ -80,34 +74,6 @@ interface ConcretePatchResult {
 
 type AgentStageId = 'scout' | 'select' | 'prepare' | 'draft' | 'validate' | 'pr' | 'publish';
 const ARTIFACT_PUBLISH_BRANCH = 'openmeta-artifacts';
-const ISSUE_SCORING_BATCH_SIZE = 20;
-const MAX_ISSUES_FOR_LLM_SCORING = 80;
-
-const PROFILE_TERM_ALIASES: Record<string, string[]> = {
-  'typescript': ['ts', 'tsx'],
-  'javascript': ['js', 'jsx'],
-  'node js': ['node', 'nodejs', 'npm'],
-  'react': ['jsx', 'tsx', 'component', 'hooks'],
-  'vue': ['vuejs', 'component'],
-  'python': ['py', 'pytest'],
-  'django': ['python', 'orm'],
-  'fastapi': ['python', 'api'],
-  'go': ['golang'],
-  'rust': ['cargo'],
-  'docker': ['container', 'compose'],
-  'c plus plus': ['cpp'],
-};
-
-const FOCUS_AREA_TERMS: Record<string, string[]> = {
-  'web-dev': ['web', 'frontend', 'browser', 'react', 'vue', 'css', 'accessibility'],
-  'backend': ['backend', 'api', 'server', 'database', 'auth'],
-  'devops': ['ci', 'deploy', 'docker', 'kubernetes', 'workflow'],
-  'ai-ml': ['ai', 'ml', 'model', 'prompt', 'embedding', 'inference'],
-  'mobile': ['mobile', 'ios', 'android', 'swift', 'kotlin', 'react native'],
-  'security': ['security', 'auth', 'permission', 'vulnerability', 'encryption'],
-  'data': ['data', 'sql', 'pipeline', 'analytics', 'warehouse'],
-  'open-source': ['docs', 'contributor', 'cli', 'good first issue', 'help wanted'],
-};
 
 const AGENT_STAGES: Array<{ id: AgentStageId; label: string; description: string }> = [
   {
@@ -187,7 +153,7 @@ export class AgentOrchestrator {
       doneMessage: 'Opportunity ranking complete',
       failedMessage: 'Opportunity ranking failed',
       tone: 'info',
-    }, async () => this.loadRankedIssues(config, { refresh }));
+    }, async () => issueRankingService.loadRankedIssues(config, { refresh }));
     if (rankedIssues.length === 0) {
       ui.emptyState(
         'OpenMeta Agent',
@@ -201,7 +167,7 @@ export class AgentOrchestrator {
     this.renderAgentStage('select', completedStages, 'Review the top ranked issues and choose the next contribution target.');
     this.renderOpportunityList('Top ranked opportunities', rankedIssues.slice(0, 5));
     const selectedIssue = headless
-      ? this.selectIssueForAutomation(rankedIssues, config.automation.minMatchScore)
+      ? issueRankingService.selectIssueForAutomation(rankedIssues, config.automation.minMatchScore)
       : await this.promptForIssue(rankedIssues);
 
     if (!selectedIssue) {
@@ -449,7 +415,7 @@ export class AgentOrchestrator {
       doneMessage: 'Contribution opportunities scored',
       failedMessage: 'Contribution opportunity scoring failed',
       tone: 'info',
-    }, async () => this.loadRankedIssues(config, { refresh, localOnly }));
+    }, async () => issueRankingService.loadRankedIssues(config, { refresh, localOnly }));
     if (rankedIssues.length === 0) {
       ui.emptyState('OpenMeta Scout', 'No issues found', 'No issues met the current scoring thresholds.');
       return;
@@ -461,7 +427,7 @@ export class AgentOrchestrator {
       { label: 'Top score', value: String(rankedIssues[0]?.opportunity.overallScore || 0), tone: 'accent' },
       { label: 'Profile threshold', value: `${config.automation.minMatchScore}`, tone: 'info' },
     ]);
-    this.renderOpportunityList('Ranked opportunities', this.diversifyScoutIssues(rankedIssues, limit));
+    this.renderOpportunityList('Ranked opportunities', issueRankingService.diversifyScoutIssues(rankedIssues, limit));
   }
 
   async showInbox(): Promise<void> {
@@ -786,6 +752,7 @@ export class AgentOrchestrator {
     }
 
     this.octokit = new Octokit({ auth: config.github.pat });
+    contributionPrService.initialize(this.octokit);
     if (!validateLlm) {
       return;
     }
@@ -807,269 +774,6 @@ export class AgentOrchestrator {
     if (!llmValid) {
       throw new Error('LLM API connection failed. Run "openmeta init" to update your provider settings.');
     }
-  }
-
-  private async loadRankedIssues(config: AppConfig, options: { refresh?: boolean; localOnly?: boolean } = {}): Promise<RankedIssue[]> {
-    const issues = await githubService.fetchTrendingIssues({ refresh: options.refresh });
-    const rankedCandidates = this.rankIssuesForProfile(issues, config.userProfile);
-    if (options.localOnly) {
-      return opportunityService.rankIssues(this.buildLocalIssueMatches(rankedCandidates, config.userProfile));
-    }
-
-    const matched = await this.scoreIssuesInBatches(config.userProfile, rankedCandidates);
-    return opportunityService.rankIssues(matched);
-  }
-
-  private buildLocalIssueMatches(
-    issues: GitHubIssue[],
-    userProfile: AppConfig['userProfile'],
-  ): MatchedIssue[] {
-    return issues.slice(0, MAX_ISSUES_FOR_LLM_SCORING).map((issue) => {
-      const matchScore = this.clampScore(this.scoreIssueForProfile(issue, userProfile));
-      const techRequirements = this.inferLocalTechRequirements(issue, userProfile);
-
-      return {
-        ...issue,
-        matchScore,
-        analysis: {
-          coreDemand: issue.title,
-          techRequirements,
-          solutionSuggestion: 'Local scout mode can shortlist this issue, then run "openmeta agent" when the LLM provider is healthy to draft a concrete patch plan.',
-          estimatedWorkload: this.estimateLocalWorkload(issue),
-        },
-      };
-    });
-  }
-
-  private async scoreIssuesInBatches(
-    userProfile: AppConfig['userProfile'],
-    issues: Awaited<ReturnType<typeof githubService.fetchTrendingIssues>>,
-  ) {
-    const matches = [];
-    const issuesToScore = issues.slice(0, MAX_ISSUES_FOR_LLM_SCORING);
-
-    for (let start = 0; start < issuesToScore.length; start += ISSUE_SCORING_BATCH_SIZE) {
-      const batch = issuesToScore.slice(start, start + ISSUE_SCORING_BATCH_SIZE);
-      const scoredBatch = await llmService.scoreIssues(userProfile, batch);
-      if (scoredBatch.status !== 'success') {
-        logger.warn('Issue scoring returned advisory results that require review. Continuing with the parsed matches only.');
-      }
-      matches.push(...scoredBatch.data);
-    }
-
-    return matches;
-  }
-
-  private rankIssuesForProfile(
-    issues: GitHubIssue[],
-    userProfile: AppConfig['userProfile'],
-  ): GitHubIssue[] {
-    return [...issues].sort((left, right) => {
-      const scoreDelta = this.scoreIssueForProfile(right, userProfile) - this.scoreIssueForProfile(left, userProfile);
-      if (scoreDelta !== 0) {
-        return scoreDelta;
-      }
-
-      return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
-    });
-  }
-
-  private scoreIssueForProfile(issue: GitHubIssue, userProfile: AppConfig['userProfile']): number {
-    const profileTerms = this.getProfileTerms(userProfile);
-    const title = this.normalizeSearchText(issue.title);
-    const body = this.normalizeSearchText(issue.body);
-    const repoDescription = this.normalizeSearchText(issue.repoDescription);
-    const repoName = this.normalizeSearchText(`${issue.repoFullName} ${issue.repoName}`);
-    const labels = this.normalizeSearchText(issue.labels.join(' '));
-    let score = 0;
-
-    for (const term of profileTerms) {
-      if (title.includes(term)) {
-        score += 18;
-      }
-      if (labels.includes(term)) {
-        score += 12;
-      }
-      if (repoDescription.includes(term)) {
-        score += 8;
-      }
-      if (repoName.includes(term)) {
-        score += 5;
-      }
-      if (body.includes(term)) {
-        score += 4;
-      }
-    }
-
-    if (labels.includes('good first issue')) {
-      score += 14;
-    }
-    if (labels.includes('help wanted')) {
-      score += 9;
-    }
-    if (this.hasActionableBodySignals(issue)) {
-      score += 10;
-    }
-    if (issue.body.trim().length >= 120) {
-      score += 6;
-    }
-    if (/\b(blocked|needs info|needs information|duplicate|invalid|question|wontfix)\b/.test(labels)) {
-      score -= 28;
-    }
-
-    score += this.computeDiscoveryFreshnessBoost(issue.updatedAt);
-    score += Math.min(12, Math.log10(issue.repoStars + 10) * 5);
-
-    return score;
-  }
-
-  private getProfileTerms(userProfile: AppConfig['userProfile']): string[] {
-    const terms = new Set<string>();
-
-    for (const item of [...userProfile.techStack, ...userProfile.focusAreas]) {
-      const normalized = this.normalizeSearchText(item);
-      if (normalized) {
-        terms.add(normalized);
-      }
-
-      for (const alias of PROFILE_TERM_ALIASES[normalized] ?? []) {
-        const normalizedAlias = this.normalizeSearchText(alias);
-        if (normalizedAlias) {
-          terms.add(normalizedAlias);
-        }
-      }
-    }
-
-    for (const focusArea of userProfile.focusAreas) {
-      for (const term of FOCUS_AREA_TERMS[focusArea] ?? []) {
-        const normalized = this.normalizeSearchText(term);
-        if (normalized) {
-          terms.add(normalized);
-        }
-      }
-    }
-
-    return [...terms].filter((term) => term.length >= 2);
-  }
-
-  private normalizeSearchText(value: string): string {
-    return value
-      .toLowerCase()
-      .replace(/\+\+/g, ' plus plus')
-      .replace(/[#.]/g, ' ')
-      .replace(/[^a-z0-9]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  private hasActionableBodySignals(issue: GitHubIssue): boolean {
-    const content = `${issue.title}\n${issue.body}`;
-    return /(?:^|[\s`'"])(?:[\w.-]+\/)+[\w.-]+\.(?:ts|tsx|js|jsx|py|go|rs|java|kt|json|md|css|scss)/m.test(content) ||
-      /\b(repro|steps? to reproduce|expected|actual|acceptance criteria|stack trace)\b/i.test(content);
-  }
-
-  private computeDiscoveryFreshnessBoost(updatedAt: string): number {
-    const ageHours = (Date.now() - new Date(updatedAt).getTime()) / (1000 * 60 * 60);
-
-    if (ageHours <= 24) return 12;
-    if (ageHours <= 72) return 10;
-    if (ageHours <= 7 * 24) return 7;
-    if (ageHours <= 14 * 24) return 4;
-    return 0;
-  }
-
-  private inferLocalTechRequirements(issue: GitHubIssue, userProfile: AppConfig['userProfile']): string[] {
-    const searchable = this.normalizeSearchText([
-      issue.repoFullName,
-      issue.repoDescription,
-      issue.title,
-      issue.body,
-      issue.labels.join(' '),
-    ].join(' '));
-    const inferred = new Set<string>();
-
-    for (const item of userProfile.techStack) {
-      const normalized = this.normalizeSearchText(item);
-      const aliases = [normalized, ...(PROFILE_TERM_ALIASES[normalized] ?? []).map(alias => this.normalizeSearchText(alias))];
-      if (aliases.some(alias => alias && searchable.includes(alias))) {
-        inferred.add(item);
-      }
-    }
-
-    if (/\btsx?|typescript\b/.test(searchable)) inferred.add('TypeScript');
-    if (/\bjsx?|javascript\b/.test(searchable)) inferred.add('JavaScript');
-    if (/\breact|hooks?|component\b/.test(searchable)) inferred.add('React');
-    if (/\bnode|npm|bun\b/.test(searchable)) inferred.add('Node.js');
-    if (/\bcss|scss|accessibility|a11y|browser\b/.test(searchable)) inferred.add('Web');
-    if (/\bpython|pytest|django|fastapi\b/.test(searchable)) inferred.add('Python');
-    if (/\bgo|golang\b/.test(searchable)) inferred.add('Go');
-    if (/\brust|cargo\b/.test(searchable)) inferred.add('Rust');
-
-    return [...inferred].slice(0, 6);
-  }
-
-  private estimateLocalWorkload(issue: GitHubIssue): string {
-    const bodyLength = issue.body.trim().length;
-    const searchable = `${issue.title}\n${issue.body}`;
-
-    if (/\b(rewrite|migration|architecture|breaking change|refactor all|entire)\b/i.test(searchable)) {
-      return 'multi-session';
-    }
-
-    if (this.hasActionableBodySignals(issue) || bodyLength >= 500) {
-      return '1-3 hours';
-    }
-
-    if (bodyLength >= 120) {
-      return 'under 2 hours';
-    }
-
-    return 'needs triage';
-  }
-
-  private clampScore(value: number): number {
-    return Math.max(0, Math.min(100, Math.round(value)));
-  }
-
-  private selectIssueForAutomation(issues: RankedIssue[], minOverallScore: number): RankedIssue | undefined {
-    return issues.find((issue) => issue.opportunity.overallScore >= minOverallScore);
-  }
-
-  private diversifyScoutIssues(issues: RankedIssue[], limit: number): RankedIssue[] {
-    if (limit <= 0 || issues.length <= limit) {
-      return issues.slice(0, Math.max(0, limit));
-    }
-
-    const selected: RankedIssue[] = [];
-    const selectedIds = new Set<string>();
-    const seenRepos = new Set<string>();
-
-    for (const issue of issues) {
-      if (selected.length >= limit) {
-        break;
-      }
-
-      if (seenRepos.has(issue.repoFullName)) {
-        continue;
-      }
-
-      selected.push(issue);
-      selectedIds.add(`${issue.repoFullName}#${issue.number}`);
-      seenRepos.add(issue.repoFullName);
-    }
-
-    for (const issue of issues) {
-      if (selected.length >= limit) {
-        break;
-      }
-
-      const id = `${issue.repoFullName}#${issue.number}`;
-      if (!selectedIds.has(id)) {
-        selected.push(issue);
-      }
-    }
-
-    return selected;
   }
 
   private async promptForIssue(issues: RankedIssue[]): Promise<RankedIssue> {
@@ -1529,21 +1233,12 @@ export class AgentOrchestrator {
     }
 
     try {
-      const upstreamRepo = await this.getUpstreamRepositoryContext(input.issue);
-      const forkRepo = await this.ensureForkRepository(upstreamRepo);
-      const branchName = this.buildPublishBranchName(input.issue);
-      const draftPullRequest = this.buildDraftPullRequest(input.prDraft);
-      const commitMessage = this.buildContributionCommitMessage(input.issue);
-
-      await this.createCommitOnFork({
-        forkRepo,
-        branchName,
+      const contributionPullRequest = await contributionPrService.submitDraftPullRequest({
+        issue: input.issue,
+        prDraft: input.prDraft,
         workspacePath: input.workspace.workspacePath,
         changedFiles: input.changedFiles,
-        commitMessage,
       });
-
-      const contributionPullRequest = await this.createContributionPullRequest(upstreamRepo, forkRepo.owner, branchName, draftPullRequest);
 
       ui.card({
         label: 'OpenMeta Agent',
@@ -1551,7 +1246,7 @@ export class AgentOrchestrator {
         subtitle: 'The generated patch has been pushed to your fork and turned into a real upstream draft PR.',
         lines: [
           `Repository: ${input.issue.repoFullName}`,
-          `Branch: ${branchName}`,
+          `Branch: ${contributionPullRequest.branchName}`,
           `Changed Files: ${input.changedFiles.join(', ')}`,
           `Pull Request: ${contributionPullRequest.url}`,
         ],
@@ -1559,7 +1254,7 @@ export class AgentOrchestrator {
       });
 
       return {
-        branchName,
+        branchName: contributionPullRequest.branchName,
         url: contributionPullRequest.url,
         number: contributionPullRequest.number,
         changedFiles: input.changedFiles,
@@ -1994,23 +1689,6 @@ export class AgentOrchestrator {
     return data;
   }
 
-  private buildPublishBranchName(issue: RankedIssue): string {
-    const slug = issue.title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 32);
-
-    return `openmeta/agent-${issue.number}-${slug || 'issue'}-${Date.now()}`;
-  }
-
-  private buildDraftPullRequest(prDraft: PullRequestDraft): DraftPullRequest {
-    return {
-      title: prDraft.title,
-      body: contentService.formatPullRequestDraftBody(prDraft),
-    };
-  }
-
   private showStructuredReviewNotice(input: {
     title: string;
     subtitle: string;
@@ -2022,223 +1700,6 @@ export class AgentOrchestrator {
       subtitle: input.subtitle,
       lines: input.lines,
       tone: 'warning',
-    });
-  }
-
-  private async getUpstreamRepositoryContext(issue: RankedIssue): Promise<TargetRepoContext> {
-    const [owner, repo] = issue.repoFullName.split('/');
-    if (!owner || !repo) {
-      throw new Error(`Invalid issue repository reference: ${issue.repoFullName}`);
-    }
-
-    const repoInfo = await this.getGitHubRepositoryInfo(owner, repo);
-    return {
-      path: '',
-      owner,
-      repo,
-      defaultBranch: repoInfo.default_branch || 'main',
-    };
-  }
-
-  private async ensureForkRepository(upstreamRepo: TargetRepoContext): Promise<TargetRepoContext> {
-    if (!this.octokit) {
-      throw new Error('GitHub service not initialized');
-    }
-
-    const forkOwner = githubService.getUsername();
-
-    try {
-      const { data } = await this.octokit.rest.repos.get({
-        owner: forkOwner,
-        repo: upstreamRepo.repo,
-      });
-
-      if (!data.fork || data.parent?.full_name !== `${upstreamRepo.owner}/${upstreamRepo.repo}`) {
-        throw new Error(`Repository ${forkOwner}/${upstreamRepo.repo} exists but is not a fork of ${upstreamRepo.owner}/${upstreamRepo.repo}.`);
-      }
-
-      await this.syncForkWithUpstream(forkOwner, upstreamRepo.repo, data.default_branch || upstreamRepo.defaultBranch);
-      return {
-        path: '',
-        owner: forkOwner,
-        repo: upstreamRepo.repo,
-        defaultBranch: data.default_branch || upstreamRepo.defaultBranch,
-      };
-    } catch (error) {
-      const err = error as { status?: number };
-      if (err.status && err.status !== 404) {
-        throw error;
-      }
-    }
-
-    logger.info(`Creating fork for ${upstreamRepo.owner}/${upstreamRepo.repo}`);
-    await this.octokit.rest.repos.createFork({
-      owner: upstreamRepo.owner,
-      repo: upstreamRepo.repo,
-    });
-
-    const fork = await this.waitForFork(forkOwner, upstreamRepo.repo, `${upstreamRepo.owner}/${upstreamRepo.repo}`);
-    await this.syncForkWithUpstream(forkOwner, upstreamRepo.repo, fork.default_branch || upstreamRepo.defaultBranch);
-
-    return {
-      path: '',
-      owner: forkOwner,
-      repo: upstreamRepo.repo,
-      defaultBranch: fork.default_branch || upstreamRepo.defaultBranch,
-    };
-  }
-
-  private async waitForFork(owner: string, repo: string, expectedParent: string) {
-    if (!this.octokit) {
-      throw new Error('GitHub service not initialized');
-    }
-
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      try {
-        const { data } = await this.octokit.rest.repos.get({ owner, repo });
-        if (data.fork && data.parent?.full_name === expectedParent) {
-          return data;
-        }
-      } catch {
-        // Continue polling until the fork is visible.
-      }
-
-      await this.delay(1500);
-    }
-
-    throw new Error(`Fork ${owner}/${repo} was not ready in time.`);
-  }
-
-  private async syncForkWithUpstream(owner: string, repo: string, branch: string): Promise<void> {
-    if (!this.octokit) {
-      throw new Error('GitHub service not initialized');
-    }
-
-    try {
-      await this.octokit.rest.repos.mergeUpstream({
-        owner,
-        repo,
-        branch,
-      });
-    } catch (error) {
-      logger.debug(`Unable to sync fork ${owner}/${repo} with upstream before opening a PR`, error);
-    }
-  }
-
-  private async createCommitOnFork(input: {
-    forkRepo: TargetRepoContext;
-    branchName: string;
-    workspacePath: string;
-    changedFiles: string[];
-    commitMessage: string;
-  }): Promise<void> {
-    if (!this.octokit) {
-      throw new Error('GitHub service not initialized');
-    }
-
-    const branch = await this.octokit.rest.repos.getBranch({
-      owner: input.forkRepo.owner,
-      repo: input.forkRepo.repo,
-      branch: input.forkRepo.defaultBranch,
-    });
-
-    const baseCommitSha = branch.data.commit.sha;
-    const baseTreeSha = branch.data.commit.commit.tree.sha;
-
-    const tree = input.changedFiles.map((filePath) => ({
-      path: filePath,
-      mode: '100644' as const,
-      type: 'blob' as const,
-      content: readFileSync(join(input.workspacePath, filePath), 'utf-8'),
-    }));
-
-    const createdTree = await this.octokit.rest.git.createTree({
-      owner: input.forkRepo.owner,
-      repo: input.forkRepo.repo,
-      base_tree: baseTreeSha,
-      tree,
-    });
-
-    const createdCommit = await this.octokit.rest.git.createCommit({
-      owner: input.forkRepo.owner,
-      repo: input.forkRepo.repo,
-      message: input.commitMessage,
-      tree: createdTree.data.sha,
-      parents: [baseCommitSha],
-    });
-
-    try {
-      await this.octokit.rest.git.createRef({
-        owner: input.forkRepo.owner,
-        repo: input.forkRepo.repo,
-        ref: `refs/heads/${input.branchName}`,
-        sha: createdCommit.data.sha,
-      });
-    } catch (error) {
-      const err = error as { status?: number };
-      if (err.status !== 422) {
-        throw error;
-      }
-
-      await this.octokit.rest.git.updateRef({
-        owner: input.forkRepo.owner,
-        repo: input.forkRepo.repo,
-        ref: `heads/${input.branchName}`,
-        sha: createdCommit.data.sha,
-        force: true,
-      });
-    }
-  }
-
-  private async createContributionPullRequest(
-    upstreamRepo: TargetRepoContext,
-    forkOwner: string,
-    branchName: string,
-    draftPullRequest: DraftPullRequest,
-  ): Promise<{ url: string; number: number }> {
-    if (!this.octokit) {
-      throw new Error('GitHub service not initialized');
-    }
-
-    const existing = await this.octokit.rest.pulls.list({
-      owner: upstreamRepo.owner,
-      repo: upstreamRepo.repo,
-      head: `${forkOwner}:${branchName}`,
-      base: upstreamRepo.defaultBranch,
-      state: 'open',
-    });
-
-    const [existingPullRequest] = existing.data;
-    if (existingPullRequest) {
-      return {
-        url: existingPullRequest.html_url,
-        number: existingPullRequest.number,
-      };
-    }
-
-    const { data } = await this.octokit.rest.pulls.create({
-      owner: upstreamRepo.owner,
-      repo: upstreamRepo.repo,
-      title: draftPullRequest.title,
-      body: draftPullRequest.body,
-      head: `${forkOwner}:${branchName}`,
-      base: upstreamRepo.defaultBranch,
-      draft: true,
-    });
-
-    return {
-      url: data.html_url,
-      number: data.number,
-    };
-  }
-
-  private buildContributionCommitMessage(issue: RankedIssue): string {
-    return `feat: address ${issue.repoFullName}#${issue.number} ${issue.title}`.slice(0, 120);
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      setTimeout(resolve, ms);
     });
   }
 
