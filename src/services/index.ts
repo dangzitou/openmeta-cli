@@ -4,6 +4,7 @@ export { contentService, ContentService } from './content.js';
 export { gitService, GitService } from './git.js';
 export { schedulerService, SchedulerService } from './scheduler.js';
 export { opportunityService, OpportunityService } from './opportunity.js';
+export { issueRankingService, IssueRankingService } from './issue-ranking.js';
 export { memoryService, MemoryService } from './memory.js';
 export { inboxService, InboxService } from './inbox.js';
 export { proofOfWorkService, ProofOfWorkService } from './proof-of-work.js';
