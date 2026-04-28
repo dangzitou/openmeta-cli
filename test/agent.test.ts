@@ -6,16 +6,11 @@ import { AgentOrchestrator } from '../src/orchestration/agent.js';
 import { llmService, workspaceService } from '../src/services/index.js';
 import {
   createPatchDraft,
-  createPullRequestDraft,
   createRankedIssue,
   createWorkspace,
 } from './helpers/factories.js';
 
 interface AgentInternals {
-  buildDraftPullRequest(prDraft: ReturnType<typeof createPullRequestDraft>): {
-    title: string;
-    body: string;
-  };
   buildImplementationWorkspace(
     workspace: ReturnType<typeof createWorkspace>,
     patchDraft: ReturnType<typeof createPatchDraft>,
@@ -61,16 +56,7 @@ afterEach(() => {
   }
 });
 
-describe('AgentOrchestrator draft PR parsing', () => {
-  test('builds a real pull request payload from the structured draft', () => {
-    const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
-    const parsed = orchestrator.buildDraftPullRequest(createPullRequestDraft());
-
-    expect(parsed.title).toBe('Add aria-label handling to icon-only buttons');
-    expect(parsed.body).toContain('## Summary');
-    expect(parsed.body).not.toContain('Title:');
-  });
-
+describe('AgentOrchestrator patch workflow', () => {
   test('marks exit code 127 validations as unavailable instead of failed', () => {
     const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
     const summary = orchestrator.formatValidationSummary([

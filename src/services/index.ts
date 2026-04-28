@@ -2,6 +2,7 @@ export { githubService, GitHubService } from './github.js';
 export { llmService, LLMService } from './llm.js';
 export { contentService, ContentService } from './content.js';
 export { gitService, GitService } from './git.js';
+export { contributionPrService, ContributionPrService } from './contribution-pr.js';
 export { schedulerService, SchedulerService } from './scheduler.js';
 export { opportunityService, OpportunityService } from './opportunity.js';
 export { issueRankingService, IssueRankingService } from './issue-ranking.js';
