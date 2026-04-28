@@ -132,8 +132,8 @@ export class ConfigOrchestrator {
     } else if (key === 'github.targetRepoPath') {
       updated = await configService.update({ github: { ...config.github, targetRepoPath: value } });
     } else if (key === 'llm.provider') {
-      if (!['openai', 'minimax', 'moonshot', 'zhipu', 'custom'].includes(value)) {
-        throw new Error('llm.provider must be "openai", "minimax", "moonshot", "zhipu", or "custom".');
+      if (!['openai', 'minimax', 'moonshot', 'zhipu', 'gemini', 'claude', 'custom'].includes(value)) {
+        throw new Error('llm.provider must be "openai", "minimax", "moonshot", "zhipu", "gemini", "claude", or "custom".');
       }
       updated = await configService.update({ llm: { ...config.llm, provider: value as AppConfig['llm']['provider'] } });
     } else if (key === 'llm.apiBaseUrl') {
