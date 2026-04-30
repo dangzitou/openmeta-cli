@@ -1,4 +1,5 @@
-import { configService, ui } from '../infra/index.js';
+import { configService, prompt, selectPrompt, ui } from '../infra/index.js';
+import { LLM_PROVIDER_PRESETS, findLLMProviderPreset } from '../services/index.js';
 import { llmService } from '../services/index.js';
 import type { AppConfig, LLMProvider, LLMProviderProfile } from '../types/index.js';
 
@@ -38,6 +39,15 @@ function parseHeaders(values: string[] = []): Record<string, string> {
   }
 
   return headers;
+}
+
+function parseHeaderInput(value: string): Record<string, string> {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {};
+  }
+
+  return parseHeaders(trimmed.split(',').map((item) => item.trim()).filter(Boolean));
 }
 
 function parseProvider(value: string | undefined): LLMProvider {
@@ -149,6 +159,170 @@ export class ProviderOrchestrator {
     });
   }
 
+  async configure(): Promise<void> {
+    const config = await configService.get();
+
+    ui.hero({
+      label: 'OpenMeta Provider',
+      title: 'Configure a provider profile without memorizing flags',
+      subtitle: 'Save one LLM backend as a named profile, then switch to it whenever OpenMeta needs a different model route.',
+      lines: [
+        `Current provider: ${config.llm.provider} / ${config.llm.modelName || '(no model)'}`,
+        `Active profile: ${config.llm.activeProfile || '(none)'}`,
+      ],
+      tone: 'accent',
+    });
+
+    const { profileName } = await prompt<{ profileName: string }>([
+      {
+        type: 'input',
+        name: 'profileName',
+        message: 'Provider profile name:',
+        default: this.suggestProfileName(config),
+        filter: (input: string) => input.trim(),
+        validate: (input: string) => {
+          try {
+            this.normalizeProfileName(input);
+            return true;
+          } catch (error) {
+            return error instanceof Error ? error.message : 'Invalid provider profile name.';
+          }
+        },
+      },
+    ]);
+    const name = this.normalizeProfileName(profileName);
+
+    const provider = await selectPrompt<LLMProvider>({
+      message: 'Select LLM provider:',
+      default: this.getProviderDefault(config.llm.provider),
+      choices: LLM_PROVIDER_PRESETS.map((preset) => ({
+        name: preset.name,
+        value: preset.value,
+        description: preset.baseUrl || 'Bring your own OpenAI-compatible endpoint',
+      })),
+    });
+    const preset = findLLMProviderPreset(provider);
+    if (!preset) {
+      throw new Error(`Provider not found: ${provider}`);
+    }
+
+    let apiBaseUrl = preset.baseUrl;
+    if (preset.allowCustomBaseUrl) {
+      ({ apiBaseUrl } = await prompt<{ apiBaseUrl: string }>([
+        {
+          type: 'input',
+          name: 'apiBaseUrl',
+          message: 'OpenAI-compatible API base URL:',
+          default: config.llm.apiBaseUrl || 'https://api.openai.com/v1',
+          filter: (input: string) => input.trim(),
+          validate: (input: string) => input.length > 0 || 'API base URL is required.',
+        },
+      ]));
+    }
+
+    let modelName = config.llm.modelName;
+    if (preset.allowCustomModel) {
+      ({ modelName } = await prompt<{ modelName: string }>([
+        {
+          type: 'input',
+          name: 'modelName',
+          message: 'Model name:',
+          default: config.llm.modelName || 'gpt-4o-mini',
+          filter: (input: string) => input.trim(),
+          validate: (input: string) => input.length > 0 || 'Model name is required.',
+        },
+      ]));
+    } else {
+      modelName = await selectPrompt<string>({
+        message: 'Select model:',
+        default: preset.models.some((model) => model.value === config.llm.modelName)
+          ? config.llm.modelName
+          : preset.models[0]?.value,
+        choices: preset.models.map((model) => ({ name: model.name, value: model.value })),
+      });
+    }
+
+    const { apiKey } = await prompt<{ apiKey: string }>([
+      {
+        type: 'password',
+        name: 'apiKey',
+        message: 'LLM API key:',
+        mask: '*',
+        validate: (input: string) => input.trim().length > 0 || 'API key is required.',
+      },
+    ]);
+
+    const { extraHeaders } = await prompt<{ extraHeaders: string }>([
+      {
+        type: 'input',
+        name: 'extraHeaders',
+        message: 'Extra headers (optional, comma-separated key=value):',
+        default: this.formatHeaderInput(preset.apiHeaders || config.llm.apiHeaders || {}),
+        filter: (input: string) => input.trim(),
+        validate: (input: string) => {
+          try {
+            parseHeaderInput(input);
+            return true;
+          } catch (error) {
+            return error instanceof Error ? error.message : 'Invalid header format.';
+          }
+        },
+      },
+    ]);
+
+    const { activate } = await prompt<{ activate: boolean }>([
+      {
+        type: 'confirm',
+        name: 'activate',
+        message: 'Use this provider profile now?',
+        default: true,
+      },
+    ]);
+
+    let validate = false;
+    if (activate) {
+      ({ validate } = await prompt<{ validate: boolean }>([
+        {
+          type: 'confirm',
+          name: 'validate',
+          message: 'Validate this provider after switching?',
+          default: true,
+        },
+      ]));
+    }
+
+    const profile: LLMProviderProfile = {
+      provider,
+      apiBaseUrl,
+      modelName,
+      apiKey: apiKey.trim(),
+      apiHeaders: {
+        ...(preset.apiHeaders || {}),
+        ...parseHeaderInput(extraHeaders),
+      },
+    };
+
+    await this.saveProfile(config, name, profile, config.llm.activeProfile);
+
+    if (activate) {
+      await this.use(name, { validate });
+      return;
+    }
+
+    ui.card({
+      label: 'OpenMeta Provider',
+      title: 'Provider profile saved',
+      subtitle: 'Switch to it later with "openmeta provider use <name>".',
+      lines: [
+        `Profile: ${name}`,
+        `Provider: ${profile.provider}`,
+        `Model: ${profile.modelName}`,
+        `Endpoint: ${profile.apiBaseUrl}`,
+      ],
+      tone: 'success',
+    });
+  }
+
   async use(nameInput: string, options: ProviderUseOptions = {}): Promise<void> {
     const name = this.normalizeProfileName(nameInput);
     const config = await configService.get();
@@ -228,6 +402,31 @@ export class ProviderOrchestrator {
     }
 
     return name;
+  }
+
+  private getProviderDefault(provider: LLMProvider): LLMProvider {
+    return LLM_PROVIDER_PRESETS.some((option) => option.value === provider)
+      ? provider
+      : 'custom';
+  }
+
+  private suggestProfileName(config: AppConfig): string {
+    if (config.llm.activeProfile) {
+      return config.llm.activeProfile;
+    }
+
+    const model = config.llm.modelName || 'default';
+    return `${config.llm.provider}-${model}`
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^[^a-z0-9]+/, '')
+      .slice(0, 64) || 'default';
+  }
+
+  private formatHeaderInput(headers: Record<string, string>): string {
+    return Object.entries(headers)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(', ');
   }
 
   private currentProfileFromConfig(config: AppConfig): LLMProviderProfile {
