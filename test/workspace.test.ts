@@ -4,7 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { simpleGit } from 'simple-git';
 import { workspaceService } from '../src/services/workspace.js';
-import { createRankedIssue } from './helpers/factories.js';
+import { createPatchDraft, createRankedIssue, createWorkspace } from './helpers/factories.js';
 
 const tempDirs: string[] = [];
 
@@ -261,5 +261,109 @@ describe('workspaceService.detectTestCommands', () => {
     }, ['src/utils/labels.ts', 'src/components/IconButton.tsx']);
 
     expect(rankedFiles[0]).toBe('src/components/IconButton.tsx');
+  });
+});
+
+describe('workspaceService.expandImplementationContext', () => {
+  test('finds relevant deep source files from issue and patch draft signals', () => {
+    const workspacePath = makeWorkspace();
+    mkdirSync(join(workspacePath, 'packages', 'admin', 'orders'), { recursive: true });
+    writeFileSync(join(workspacePath, 'README.md'), '# Demo\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'packages', 'admin', 'orders', 'order-list-table.tsx'), 'export function OrderListTable() { return null; }\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'packages', 'admin', 'orders', 'order-filters.ts'), 'export const orderFilters = [];\n', 'utf-8');
+
+    const expanded = workspaceService.expandImplementationContext({
+      issue: createRankedIssue({
+        title: 'Filter orders by fulfillment status in admin UI',
+        body: 'The order list table should expose fulfillment and payment filters.',
+        analysis: {
+          coreDemand: 'Add fulfillment status filters to the order list table.',
+          techRequirements: ['react', 'typescript', 'orders'],
+          solutionSuggestion: '',
+          estimatedWorkload: '2-4 hours',
+        },
+      }),
+      patchDraft: createPatchDraft({
+        targetFiles: [
+          {
+            path: 'packages/admin/orders/order-list-table.tsx',
+            reason: 'Order list table UI',
+          },
+        ],
+        proposedChanges: [
+          {
+            title: 'Add order filters',
+            details: 'Wire fulfillment and payment filters into the order list.',
+            files: ['packages/admin/orders/order-filters.ts'],
+          },
+        ],
+      }),
+      workspace: createWorkspace({
+        workspacePath,
+        candidateFiles: ['README.md'],
+        snippets: [{ path: 'README.md', content: '# Demo\n' }],
+      }),
+      round: 1,
+    });
+
+    expect(expanded.snippets.map((snippet) => snippet.path)).toContain('packages/admin/orders/order-list-table.tsx');
+    expect(expanded.snippets.map((snippet) => snippet.path)).toContain('packages/admin/orders/order-filters.ts');
+  });
+
+  test('does not read excluded directories during context expansion', () => {
+    const workspacePath = makeWorkspace();
+    mkdirSync(join(workspacePath, 'src'), { recursive: true });
+    mkdirSync(join(workspacePath, 'node_modules', 'orders'), { recursive: true });
+    writeFileSync(join(workspacePath, 'src', 'order-filter.ts'), 'export const safe = true;\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'node_modules', 'orders', 'order-filter.ts'), 'export const unsafe = true;\n', 'utf-8');
+
+    const expanded = workspaceService.expandImplementationContext({
+      issue: createRankedIssue({
+        title: 'Improve order filter',
+        body: 'The order filter should live in source files.',
+      }),
+      patchDraft: createPatchDraft({
+        targetFiles: [{ path: 'order-filter.ts', reason: 'Filter implementation' }],
+      }),
+      workspace: createWorkspace({
+        workspacePath,
+        candidateFiles: [],
+        snippets: [],
+      }),
+      round: 1,
+    });
+
+    expect(expanded.snippets.map((snippet) => snippet.path)).toContain('src/order-filter.ts');
+    expect(expanded.snippets.map((snippet) => snippet.path)).not.toContain('node_modules/orders/order-filter.ts');
+  });
+
+  test('respects the bounded per-round and total snippet limits', () => {
+    const workspacePath = makeWorkspace();
+    mkdirSync(join(workspacePath, 'src'), { recursive: true });
+    for (let index = 0; index < 10; index += 1) {
+      writeFileSync(join(workspacePath, 'src', `order-${index}.ts`), `export const order${index} = true;\n`, 'utf-8');
+    }
+
+    const expanded = workspaceService.expandImplementationContext({
+      issue: createRankedIssue({
+        title: 'Update order behavior',
+        body: 'Order files need context.',
+      }),
+      patchDraft: createPatchDraft(),
+      workspace: createWorkspace({
+        workspacePath,
+        candidateFiles: [],
+        snippets: [
+          { path: 'existing-a.ts', content: 'a' },
+          { path: 'existing-b.ts', content: 'b' },
+        ],
+      }),
+      round: 1,
+      maxNewFiles: 3,
+      maxTotalSnippets: 4,
+    });
+
+    expect(expanded.snippets).toHaveLength(4);
+    expect(expanded.snippets.filter((snippet) => snippet.path.startsWith('src/order-'))).toHaveLength(2);
   });
 });

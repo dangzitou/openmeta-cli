@@ -3,6 +3,7 @@ import { spawnSync } from 'child_process';
 import { basename, dirname, join, relative, resolve, sep } from 'path';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { ensureDirectory, getOpenMetaWorkspaceRoot, logger } from '../infra/index.js';
+import type { PatchDraft } from '../contracts/index.js';
 import type {
   GeneratedFileChange,
   GeneratedChangeApplyResult,
@@ -26,9 +27,12 @@ const EXCLUDED_DIRS = new Set([
 ]);
 
 const MAX_DISCOVERED_FILES = 250;
+const MAX_CONTEXT_DISCOVERY_FILES = 2000;
 const MAX_SNIPPET_CHARS = 8000;
 const MAX_GENERATED_FILES = 6;
 const MAX_GENERATED_FILE_CHARS = 60_000;
+const DEFAULT_CONTEXT_EXPANSION_LIMIT = 8;
+const DEFAULT_CONTEXT_SNIPPET_LIMIT = 24;
 type ExecutionMode = 'interactive' | 'headless';
 
 function sanitizeRepoName(repoFullName: string): string {
@@ -82,7 +86,7 @@ export class WorkspaceService {
     }
 
     const topLevelFiles = readdirSync(workspacePath).slice(0, 50);
-    const discoveredFiles = this.discoverFiles(workspacePath);
+    const discoveredFiles = this.discoverFiles(workspacePath, MAX_DISCOVERED_FILES);
     const candidateFiles = this.rankCandidateFiles(issue, memory, discoveredFiles).slice(0, 8);
     const snippets = candidateFiles.map((path) => ({
       path,
@@ -205,6 +209,51 @@ export class WorkspaceService {
     });
   }
 
+  expandImplementationContext(input: {
+    issue: RankedIssue;
+    patchDraft: PatchDraft;
+    workspace: RepoWorkspaceContext;
+    round: number;
+    maxNewFiles?: number;
+    maxTotalSnippets?: number;
+  }): RepoWorkspaceContext {
+    const maxNewFiles = input.maxNewFiles ?? DEFAULT_CONTEXT_EXPANSION_LIMIT;
+    const maxTotalSnippets = input.maxTotalSnippets ?? DEFAULT_CONTEXT_SNIPPET_LIMIT;
+    const existingPaths = new Set(input.workspace.snippets.map((snippet) => snippet.path));
+    const availableSlots = Math.max(0, maxTotalSnippets - input.workspace.snippets.length);
+    if (availableSlots === 0 || maxNewFiles <= 0) {
+      return input.workspace;
+    }
+
+    const targetPaths = this.extractPatchDraftPaths(input.patchDraft);
+    const keywords = this.buildContextKeywords(input.issue, input.patchDraft);
+    const discoveredFiles = this.discoverFiles(input.workspace.workspacePath, MAX_CONTEXT_DISCOVERY_FILES);
+    const nextPaths = this.rankContextExpansionFiles({
+      files: discoveredFiles,
+      existingPaths,
+      targetPaths,
+      keywords,
+      round: input.round,
+    }).slice(0, Math.min(maxNewFiles, availableSlots));
+
+    if (nextPaths.length === 0) {
+      logger.info(`Context expansion round ${input.round} found no additional files.`);
+      return input.workspace;
+    }
+
+    const extraSnippets = this.readWorkspaceFiles(input.workspace.workspacePath, nextPaths);
+    logger.info(`Context expansion round ${input.round} loaded ${extraSnippets.length} additional file(s).`);
+
+    return {
+      ...input.workspace,
+      candidateFiles: this.uniqueStrings([
+        ...input.workspace.candidateFiles,
+        ...nextPaths,
+      ]),
+      snippets: this.mergeSnippets(input.workspace.snippets, extraSnippets).slice(0, maxTotalSnippets),
+    };
+  }
+
   private async detectDefaultBranch(git: SimpleGit): Promise<string> {
     try {
       const branchReference = await git.raw(['symbolic-ref', 'refs/remotes/origin/HEAD']);
@@ -235,11 +284,11 @@ export class WorkspaceService {
     return `${baseBranchName}-${Date.now()}`;
   }
 
-  private discoverFiles(root: string): string[] {
+  private discoverFiles(root: string, maxFiles: number = MAX_DISCOVERED_FILES): string[] {
     const queue = [root];
     const files: string[] = [];
 
-    while (queue.length > 0 && files.length < MAX_DISCOVERED_FILES) {
+    while (queue.length > 0 && files.length < maxFiles) {
       const current = queue.shift();
       if (!current) {
         continue;
@@ -257,8 +306,8 @@ export class WorkspaceService {
           continue;
         }
 
-        files.push(relative(root, join(current, entry.name)));
-        if (files.length >= MAX_DISCOVERED_FILES) {
+        files.push(this.normalizeRelativePath(relative(root, join(current, entry.name))));
+        if (files.length >= maxFiles) {
           break;
         }
       }
@@ -276,6 +325,60 @@ export class WorkspaceService {
 
     return [...files]
       .sort((left, right) => this.scorePath(right, keywords, memory, referencedPaths) - this.scorePath(left, keywords, memory, referencedPaths));
+  }
+
+  private rankContextExpansionFiles(input: {
+    files: string[];
+    existingPaths: Set<string>;
+    targetPaths: string[];
+    keywords: string[];
+    round: number;
+  }): string[] {
+    return [...input.files]
+      .filter((path) => !input.existingPaths.has(path))
+      .filter((path) => this.isLikelyContextFile(path))
+      .sort((left, right) =>
+        this.scoreContextExpansionPath(right, input.keywords, input.targetPaths, input.round) -
+        this.scoreContextExpansionPath(left, input.keywords, input.targetPaths, input.round)
+      );
+  }
+
+  private scoreContextExpansionPath(path: string, keywords: string[], targetPaths: string[], round: number): number {
+    let score = 0;
+    const lowerPath = path.toLowerCase();
+    const fileName = basename(lowerPath);
+
+    for (const targetPath of targetPaths) {
+      const lowerTarget = targetPath.toLowerCase();
+      if (lowerPath === lowerTarget) {
+        score += 120;
+      } else if (lowerPath.endsWith(lowerTarget)) {
+        score += 80;
+      } else if (lowerPath.includes(lowerTarget) || fileName === basename(lowerTarget)) {
+        score += 45;
+      }
+    }
+
+    for (const keyword of keywords) {
+      if (lowerPath.includes(keyword)) {
+        score += 8;
+      }
+      if (fileName.includes(keyword)) {
+        score += 10;
+      }
+    }
+
+    if (/\.(test|spec)\.(ts|tsx|js|jsx|py|go|rs|java|kt)$/.test(lowerPath)) {
+      score += round > 1 ? 10 : 4;
+    }
+    if (/\.(ts|tsx|js|jsx|py|go|rs|java|kt)$/.test(fileName)) {
+      score += 6;
+    }
+    if (lowerPath.includes('/src/') || lowerPath.startsWith('src/')) {
+      score += 5;
+    }
+
+    return score;
   }
 
   private scorePath(path: string, keywords: string[], memory: RepoMemory, referencedPaths: string[]): number {
@@ -344,6 +447,78 @@ export class WorkspaceService {
     } catch {
       return '';
     }
+  }
+
+  private normalizeRelativePath(path: string): string {
+    return path.split(sep).join('/');
+  }
+
+  private buildContextKeywords(issue: RankedIssue, patchDraft: PatchDraft): string[] {
+    const patchText = [
+      patchDraft.goal,
+      ...patchDraft.targetFiles.flatMap((file) => [file.path, file.reason]),
+      ...patchDraft.proposedChanges.flatMap((change) => [change.title, change.details, ...change.files]),
+    ].join(' ');
+    const text = [
+      issue.title,
+      issue.body,
+      issue.analysis.coreDemand,
+      issue.analysis.techRequirements.join(' '),
+      patchText,
+    ].join(' ');
+
+    return this.uniqueStrings(text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 3)
+      .filter((token) => !this.isLowSignalKeyword(token)))
+      .slice(0, 80);
+  }
+
+  private extractPatchDraftPaths(patchDraft: PatchDraft): string[] {
+    return this.uniqueStrings([
+      ...patchDraft.targetFiles.map((file) => file.path),
+      ...patchDraft.proposedChanges.flatMap((change) => change.files),
+    ].map((path) => path.replace(/^\/+/, '').trim()).filter(Boolean));
+  }
+
+  private isLikelyContextFile(path: string): boolean {
+    return /\.(ts|tsx|js|jsx|py|go|rs|java|kt|json|md|css|scss|yml|yaml)$/.test(path.toLowerCase());
+  }
+
+  private isLowSignalKeyword(token: string): boolean {
+    return new Set([
+      'the',
+      'and',
+      'for',
+      'with',
+      'from',
+      'this',
+      'that',
+      'issue',
+      'update',
+      'change',
+      'changes',
+      'file',
+      'files',
+      'test',
+      'tests',
+    ]).has(token);
+  }
+
+  private mergeSnippets(current: RepoFileSnippet[], next: RepoFileSnippet[]): RepoFileSnippet[] {
+    const snippets = new Map<string, RepoFileSnippet>();
+    for (const snippet of [...current, ...next]) {
+      if (!snippets.has(snippet.path)) {
+        snippets.set(snippet.path, snippet);
+      }
+    }
+
+    return [...snippets.values()];
+  }
+
+  private uniqueStrings(values: string[]): string[] {
+    return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
   }
 
   private extractReferencedPaths(content: string): string[] {
