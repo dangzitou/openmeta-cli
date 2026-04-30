@@ -242,6 +242,14 @@ If you prefer not to create a global symlink, you can still run the built file d
 | `openmeta scout --limit <count>` | Rank the highest-value contribution opportunities |
 | `openmeta inbox` | Show drafted contribution opportunities |
 | `openmeta pow` | Show proof-of-work history |
+| `openmeta runs` | Show recent command runs, durations, and failure reasons |
+| `openmeta runs <id>` | Inspect one recorded run |
+| `openmeta provider list` | List saved LLM provider profiles |
+| `openmeta provider config` | Configure a provider profile interactively |
+| `openmeta provider save <name>` | Save current LLM settings as a reusable provider profile |
+| `openmeta provider add <name>` | Add a provider profile from command-line values |
+| `openmeta provider use <name>` | Switch the active LLM provider to a saved profile |
+| `openmeta provider remove <name>` | Remove a saved provider profile |
 | `openmeta automation status` | Show automation state |
 | `openmeta automation enable` | Enable unattended daily automation using saved settings |
 | `openmeta automation disable` | Disable unattended daily automation and remove the system scheduler |
