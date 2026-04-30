@@ -266,6 +266,14 @@ OpenMeta maintains a clear local footprint:
 - artifacts: `~/.openmeta/artifacts`
 - repo memory and proof-of-work state: stored in the local OpenMeta state area
 
+## Bounded Context Expansion
+
+During `openmeta agent`, OpenMeta now retries implementation drafting with bounded repository context expansion when the model reports insufficient code context.
+
+- Context expansion is enabled by default and only reads files inside the prepared workspace.
+- The loop is capped at three expansion rounds and never bypasses dirty-workspace, draft-only, validation, or generated-file safety gates.
+- Editable context is capped at approximately 200k tokens using deterministic compression; no extra summarization model call is required.
+
 ## Security Model
 
 OpenMeta is built around user-controlled execution:
