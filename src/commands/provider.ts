@@ -19,6 +19,12 @@ export function registerProviderCommand(program: Command): void {
     .action((name: string) => runCommand('OpenMeta Provider', () => providerOrchestrator.save(name)));
 
   provider
+    .command('config')
+    .alias('configure')
+    .description('Configure a provider profile interactively')
+    .action(() => runCommand('OpenMeta Provider', () => providerOrchestrator.configure()));
+
+  provider
     .command('add <name>')
     .description('Add a provider profile from command-line values')
     .option('--provider <provider>', 'Provider type, defaults to custom')
