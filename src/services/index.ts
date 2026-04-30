@@ -11,5 +11,6 @@ export { inboxService, InboxService } from './inbox.js';
 export { proofOfWorkService, ProofOfWorkService } from './proof-of-work.js';
 export { workspaceService, WorkspaceService } from './workspace.js';
 export { runHistoryService, RunHistoryService } from './run-history.js';
+export { contextBudgetService, ContextBudgetService } from './context-budget.js';
 export { LLM_PROVIDER_PRESETS, findLLMProviderPreset, type LLMProviderPreset } from './llm.providers.js';
 export type { SchedulerSyncResult } from './scheduler.js';

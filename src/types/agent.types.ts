@@ -36,6 +36,9 @@ export interface TestResult {
 export interface RepoFileSnippet {
   path: string;
   content: string;
+  compressed?: boolean;
+  originalChars?: number;
+  estimatedTokens?: number;
 }
 
 export interface GeneratedFileChange {

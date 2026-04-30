@@ -41,6 +41,7 @@ import {
   PR_DRAFT_PROMPT,
   VALIDATION_REPAIR_PROMPT,
 } from '../infra/prompt-templates.js';
+import { contextBudgetService } from './context-budget.js';
 
 export class LLMService {
   private client: OpenAI | null = null;
@@ -174,7 +175,9 @@ Repo Stars: ${i.repoStars}`
       `Runnable Validation Commands: ${workspace.validationCommands.map((item) => item.command).join(', ') || 'none'}`,
       `Validation Safety Notes: ${workspace.validationWarnings.join(' | ') || 'none'}`,
       'Snippets:',
-      ...workspace.snippets.map((snippet) => `FILE: ${snippet.path}\n${snippet.content}`),
+      ...this.prepareSnippetsForPrompt(workspace.snippets, {
+        keywords: this.extractIssueKeywords(issue),
+      }).map((snippet) => this.formatSnippetForPrompt(snippet)),
     ].join('\n\n');
 
     const repoMemory = this.formatRepoMemory(memory);
@@ -196,8 +199,15 @@ Repo Stars: ${i.repoStars}`
     workspace: RepoWorkspaceContext,
     patchDraft: PatchDraft,
   ): Promise<StructuredOutputResult<'implementation_draft', ImplementationDraft>> {
-    const editableFiles = workspace.snippets.length > 0
-      ? workspace.snippets.map((snippet) => `FILE: ${snippet.path}\n${snippet.content}`).join('\n\n')
+    const budgetedSnippets = this.prepareSnippetsForPrompt(workspace.snippets, {
+      priorityPaths: [
+        ...patchDraft.targetFiles.map((file) => file.path),
+        ...patchDraft.proposedChanges.flatMap((change) => change.files),
+      ],
+      keywords: this.extractIssueKeywords(issue),
+    });
+    const editableFiles = budgetedSnippets.length > 0
+      ? budgetedSnippets.map((snippet) => this.formatSnippetForPrompt(snippet)).join('\n\n')
       : 'No editable files were detected.';
 
     const prompt = fillPrompt(CODE_CHANGE_PROMPT, {
@@ -420,6 +430,37 @@ Repo Stars: ${i.repoStars}`
       `Overall Score: ${issue.opportunity.overallScore}`,
       `Opportunity Summary: ${issue.opportunity.summary}`,
     ].join('\n');
+  }
+
+  private prepareSnippetsForPrompt(snippets: RepoFileSnippet[], options: {
+    priorityPaths?: string[];
+    keywords?: string[];
+  } = {}): RepoFileSnippet[] {
+    const budgeted = contextBudgetService.applySnippetBudget(snippets, options);
+    if (budgeted.compressed) {
+      logger.info(`Compressed implementation context to approximately ${budgeted.estimatedTokens} tokens.`);
+    }
+
+    return budgeted.snippets;
+  }
+
+  private formatSnippetForPrompt(snippet: RepoFileSnippet): string {
+    const metadata = snippet.compressed
+      ? `FILE: ${snippet.path} (compressed; original ${snippet.originalChars ?? 'unknown'} chars; approx ${snippet.estimatedTokens ?? 'unknown'} tokens)`
+      : `FILE: ${snippet.path}`;
+
+    return `${metadata}\n${snippet.content}`;
+  }
+
+  private extractIssueKeywords(issue: RankedIssue): string[] {
+    return [
+      issue.title,
+      issue.analysis.coreDemand,
+      issue.analysis.techRequirements.join(' '),
+    ].join(' ')
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 3);
   }
 
   private formatRepoMemory(memory: RepoMemory): string {
