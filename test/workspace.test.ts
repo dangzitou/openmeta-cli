@@ -30,7 +30,7 @@ describe('workspaceService.applyGeneratedChanges', () => {
     mkdirSync(join(workspacePath, 'src'), { recursive: true });
     writeFileSync(filePath, 'export const button = 1;\n', 'utf-8');
 
-    const changedFiles = workspaceService.applyGeneratedChanges(workspacePath, [
+    const result = workspaceService.applyGeneratedChanges(workspacePath, [
       {
         path: 'src/button.ts',
         reason: 'Update implementation',
@@ -38,7 +38,8 @@ describe('workspaceService.applyGeneratedChanges', () => {
       },
     ]);
 
-    expect(changedFiles).toEqual(['src/button.ts']);
+    expect(result.appliedFiles).toEqual(['src/button.ts']);
+    expect(result.reviewRequired).toBe(false);
     expect(readFileSync(filePath, 'utf-8')).toBe('export const button = 2;\n');
   });
 
@@ -46,7 +47,7 @@ describe('workspaceService.applyGeneratedChanges', () => {
     const workspacePath = makeWorkspace();
     const outsidePath = join(workspacePath, '..', 'escape.ts');
 
-    const changedFiles = workspaceService.applyGeneratedChanges(workspacePath, [
+    const result = workspaceService.applyGeneratedChanges(workspacePath, [
       {
         path: '../escape.ts',
         reason: 'Unsafe path',
@@ -54,7 +55,9 @@ describe('workspaceService.applyGeneratedChanges', () => {
       },
     ]);
 
-    expect(changedFiles).toEqual([]);
+    expect(result.appliedFiles).toEqual([]);
+    expect(result.reviewRequired).toBe(true);
+    expect(result.skippedFiles[0]?.reason).toContain('outside the workspace');
     expect(existsSync(outsidePath)).toBe(false);
   });
 
@@ -63,7 +66,7 @@ describe('workspaceService.applyGeneratedChanges', () => {
     const filePath = join(workspacePath, 'README.md');
     writeFileSync(filePath, '# Demo\n', 'utf-8');
 
-    const changedFiles = workspaceService.applyGeneratedChanges(workspacePath, [
+    const result = workspaceService.applyGeneratedChanges(workspacePath, [
       {
         path: 'README.md',
         reason: 'No-op',
@@ -71,7 +74,46 @@ describe('workspaceService.applyGeneratedChanges', () => {
       },
     ]);
 
-    expect(changedFiles).toEqual([]);
+    expect(result.appliedFiles).toEqual([]);
+    expect(result.reviewRequired).toBe(false);
+    expect(result.skippedFiles[0]?.reason).toContain('unchanged');
+  });
+
+  test('requires review when generated edits target files outside implementation context', () => {
+    const workspacePath = makeWorkspace();
+    mkdirSync(join(workspacePath, 'src'), { recursive: true });
+    writeFileSync(join(workspacePath, 'src', 'known.ts'), 'export const known = 1;\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'src', 'surprise.ts'), 'export const surprise = 1;\n', 'utf-8');
+
+    const result = workspaceService.applyGeneratedChanges(workspacePath, [
+      {
+        path: 'src/surprise.ts',
+        reason: 'Unexpected edit',
+        content: 'export const surprise = 2;\n',
+      },
+    ], {
+      allowedPaths: ['src/known.ts'],
+    });
+
+    expect(result.appliedFiles).toEqual([]);
+    expect(result.reviewRequired).toBe(true);
+    expect(result.reviewReason).toContain('selected implementation context');
+    expect(readFileSync(join(workspacePath, 'src', 'surprise.ts'), 'utf-8')).toBe('export const surprise = 1;\n');
+  });
+
+  test('requires review when generated patch touches too many files', () => {
+    const workspacePath = makeWorkspace();
+    const changes = Array.from({ length: 7 }, (_, index) => ({
+      path: `src/file-${index}.ts`,
+      reason: 'Too broad',
+      content: `export const value${index} = true;\n`,
+    }));
+
+    const result = workspaceService.applyGeneratedChanges(workspacePath, changes);
+
+    expect(result.appliedFiles).toEqual([]);
+    expect(result.reviewRequired).toBe(true);
+    expect(result.reviewReason).toContain('automatic apply limit');
   });
 });
 

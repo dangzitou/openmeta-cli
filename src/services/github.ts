@@ -10,6 +10,16 @@ const FILTER_LABEL_GROUPS = [
   ['good first issue', 'good-first-issue'],
   ['help wanted', 'help-wanted'],
 ] as const;
+const ACTION_BLOCKING_LABELS = [
+  'blocked',
+  'duplicate',
+  'invalid',
+  'needs info',
+  'needs information',
+  'question',
+  'discussion',
+  'wontfix',
+] as const;
 const SEARCH_RESULTS_PER_GROUP = 30;
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
 
@@ -38,6 +48,10 @@ interface IssueCachePayload {
   issues: GitHubIssue[];
 }
 
+interface IssueDiscoveryOptions {
+  refresh?: boolean;
+}
+
 export class GitHubService {
   private octokit: Octokit | null = null;
   private username: string = '';
@@ -63,15 +77,19 @@ export class GitHubService {
     }
   }
 
-  async fetchTrendingIssues(): Promise<GitHubIssue[]> {
+  async fetchTrendingIssues(options: IssueDiscoveryOptions = {}): Promise<GitHubIssue[]> {
     if (!this.octokit) {
       throw new Error('GitHub service not initialized');
     }
 
-    const cachedIssues = this.loadCachedIssues();
-    if (cachedIssues) {
-      logger.info(`Using cached GitHub issues (${cachedIssues.length}) to avoid unnecessary Search API calls.`);
-      return cachedIssues;
+    if (!options.refresh) {
+      const cachedIssues = this.loadCachedIssues();
+      if (cachedIssues) {
+        logger.info(`Using cached GitHub issues (${cachedIssues.length}) to avoid unnecessary Search API calls.`);
+        return cachedIssues;
+      }
+    } else {
+      logger.info('Refreshing GitHub issue discovery and ignoring the local search cache.');
     }
 
     const issues: GitHubIssue[] = [];
@@ -195,7 +213,26 @@ export class GitHubService {
       return false;
     }
 
-    return true;
+    const labels = Array.isArray(item.labels) ? this.extractLabelNames(item) : [];
+    return !this.hasActionBlockingLabel(labels);
+  }
+
+  private hasActionBlockingLabel(labels: string[]): boolean {
+    const normalizedLabels = labels.map((label) => this.normalizeLabel(label));
+
+    return normalizedLabels.some((label) => ACTION_BLOCKING_LABELS.some((blockedLabel) =>
+      label === blockedLabel ||
+      label.endsWith(` ${blockedLabel}`) ||
+      label.includes(`${blockedLabel}:`)
+    ));
+  }
+
+  private normalizeLabel(label: string): string {
+    return label
+      .toLowerCase()
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   private parseRepositoryUrl(repositoryUrl: string): RepoIdentifier {

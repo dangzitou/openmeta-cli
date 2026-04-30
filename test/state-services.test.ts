@@ -6,6 +6,7 @@ import { ConfigService } from '../src/infra/config.js';
 import { inboxService } from '../src/services/inbox.js';
 import { memoryService } from '../src/services/memory.js';
 import { proofOfWorkService } from '../src/services/proof-of-work.js';
+import { runHistoryService } from '../src/services/run-history.js';
 import { createInboxItem, createProofRecord, createRankedIssue, createWorkspace } from './helpers/factories.js';
 
 let tempRoot = '';
@@ -71,6 +72,7 @@ describe('stateful services', () => {
     expect(existsSync(backupPath)).toBe(true);
     expect(readFileSync(backupPath, 'utf-8')).toContain('custom-user');
     expect(resetConfig.github.username).toBe('');
+    expect(resetConfig.automation.enabled).toBe(false);
     expect(resetConfig.automation.scheduleTime).toBe('09:00');
   });
 
@@ -90,6 +92,7 @@ describe('stateful services', () => {
 
     expect(loaded.github.username).toBe('partial-user');
     expect(loaded.llm.modelName).toBe('gpt-4o-mini');
+    expect(loaded.automation.enabled).toBe(false);
     expect(loaded.automation.scheduleTime).toBe('09:00');
   });
 
@@ -143,5 +146,20 @@ describe('stateful services', () => {
     expect(records).toHaveLength(1);
     expect(markdown).toContain('Published Runs: 1');
     expect(markdown).toContain('pr=https://github.com/acme/demo/pull/123');
+  });
+
+  test('run history service records command lifecycle and error details', () => {
+    const run = runHistoryService.start({
+      commandName: 'OpenMeta Scout',
+      args: ['scout', '--local'],
+    });
+    const finished = runHistoryService.finish(run.id, 'failed', 'LLM validation failed');
+    const state = runHistoryService.load();
+
+    expect(finished?.status).toBe('failed');
+    expect(finished?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(finished?.error).toBe('LLM validation failed');
+    expect(state.records[0]?.id).toBe(run.id);
+    expect(runHistoryService.find(run.id)?.args).toEqual(['scout', '--local']);
   });
 });

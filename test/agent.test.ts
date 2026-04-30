@@ -6,20 +6,15 @@ import { AgentOrchestrator } from '../src/orchestration/agent.js';
 import { llmService, workspaceService } from '../src/services/index.js';
 import {
   createPatchDraft,
-  createPullRequestDraft,
   createRankedIssue,
   createWorkspace,
 } from './helpers/factories.js';
 
 interface AgentInternals {
-  buildDraftPullRequest(prDraft: ReturnType<typeof createPullRequestDraft>): {
-    title: string;
-    body: string;
-  };
-  selectIssueForAutomation(
-    issues: Array<ReturnType<typeof createRankedIssue>>,
-    minOverallScore: number,
-  ): ReturnType<typeof createRankedIssue> | undefined;
+  buildImplementationWorkspace(
+    workspace: ReturnType<typeof createWorkspace>,
+    patchDraft: ReturnType<typeof createPatchDraft>,
+  ): ReturnType<typeof createWorkspace>;
   formatValidationSummary(results: Array<{
     command: string;
     exitCode: number | null;
@@ -37,6 +32,7 @@ interface AgentInternals {
     workspace: ReturnType<typeof createWorkspace>,
     patchDraft: ReturnType<typeof createPatchDraft>,
     runChecks: boolean,
+    draftOnly?: boolean,
   ): Promise<{
     changedFiles: string[];
     validationResults: Array<{
@@ -60,16 +56,7 @@ afterEach(() => {
   }
 });
 
-describe('AgentOrchestrator draft PR parsing', () => {
-  test('builds a real pull request payload from the structured draft', () => {
-    const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
-    const parsed = orchestrator.buildDraftPullRequest(createPullRequestDraft());
-
-    expect(parsed.title).toBe('Add aria-label handling to icon-only buttons');
-    expect(parsed.body).toContain('## Summary');
-    expect(parsed.body).not.toContain('Title:');
-  });
-
+describe('AgentOrchestrator patch workflow', () => {
   test('marks exit code 127 validations as unavailable instead of failed', () => {
     const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
     const summary = orchestrator.formatValidationSummary([
@@ -84,15 +71,56 @@ describe('AgentOrchestrator draft PR parsing', () => {
     expect(summary).toBe('npm run lint=unavailable (127)');
   });
 
-  test('selects the first issue that meets the automation threshold', () => {
-    const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
-    const issues = [
-      createRankedIssue({ opportunity: { ...createRankedIssue().opportunity, overallScore: 68 } }),
-      createRankedIssue({ repoFullName: 'acme/high', repoName: 'high', number: 77, opportunity: { ...createRankedIssue().opportunity, overallScore: 81 } }),
-    ];
+  test('loads patch draft target files into implementation context', () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'openmeta-agent-context-'));
+    tempDirs.push(workspacePath);
+    mkdirSync(join(workspacePath, 'src', 'components'), { recursive: true });
+    writeFileSync(join(workspacePath, 'src', 'components', 'IconButton.tsx'), 'export function IconButton() { return null; }\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'src', 'components', 'IconButton.test.tsx'), 'test("icon button", () => {});\n', 'utf-8');
 
-    const selected = orchestrator.selectIssueForAutomation(issues, 70);
-    expect(selected?.repoFullName).toBe('acme/high');
+    const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+    const workspace = orchestrator.buildImplementationWorkspace(
+      createWorkspace({
+        workspacePath,
+        candidateFiles: ['src/components/IconButton.tsx'],
+        snippets: [
+          {
+            path: 'src/components/IconButton.tsx',
+            content: 'export function IconButton() { return null; }\n',
+          },
+        ],
+      }),
+      createPatchDraft({
+        targetFiles: [
+          {
+            path: 'src/components/IconButton.tsx',
+            reason: 'Primary component',
+          },
+          {
+            path: 'src/components/IconButton.test.tsx',
+            reason: 'Coverage for the updated behavior',
+          },
+          {
+            path: '../outside.ts',
+            reason: 'Unsafe path that must not enter context',
+          },
+        ],
+        proposedChanges: [
+          {
+            title: 'Update tests',
+            details: 'Cover the accessibility behavior.',
+            files: ['src/components/IconButton.test.tsx'],
+          },
+        ],
+      }),
+    );
+
+    expect(workspace.candidateFiles).toContain('src/components/IconButton.test.tsx');
+    expect(workspace.candidateFiles).not.toContain('../outside.ts');
+    expect(workspace.snippets.map((snippet) => snippet.path)).toEqual([
+      'src/components/IconButton.tsx',
+      'src/components/IconButton.test.tsx',
+    ]);
   });
 
   test('treats infrastructure validation failures as non-blocking', () => {
@@ -236,6 +264,114 @@ describe('AgentOrchestrator draft PR parsing', () => {
         true,
       );
 
+      expect(result.changedFiles).toEqual([]);
+      expect(result.reviewRequired).toBe(true);
+      expect(readFileSync(join(workspacePath, 'src', 'app.ts'), 'utf-8')).toBe('export const version = 0;\n');
+    } finally {
+      llmService.generateImplementationDraft = originalGenerateImplementationDraft;
+    }
+  });
+
+  test('skips generated file edits in draft-only mode', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'openmeta-agent-draft-only-'));
+    tempDirs.push(workspacePath);
+    mkdirSync(join(workspacePath, 'src'), { recursive: true });
+    writeFileSync(join(workspacePath, 'src', 'app.ts'), 'export const version = 0;\n', 'utf-8');
+
+    const originalGenerateImplementationDraft = llmService.generateImplementationDraft;
+    let implementationRequested = false;
+
+    try {
+      llmService.generateImplementationDraft = async () => {
+        implementationRequested = true;
+        return {
+          version: '1',
+          kind: 'implementation_draft',
+          status: 'success',
+          data: {
+            summary: 'Patch that should not be requested',
+            fileChanges: [
+              {
+                path: 'src/app.ts',
+                reason: 'Draft-only mode should skip this edit',
+                content: 'export const version = 1;\n',
+              },
+            ],
+          },
+        };
+      };
+
+      const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+      const result = await orchestrator.generateConcretePatch(
+        createRankedIssue(),
+        createWorkspace({
+          workspacePath,
+          snippets: [{ path: 'src/app.ts', content: 'export const version = 0;\n' }],
+          testCommands: [],
+          validationCommands: [],
+          validationWarnings: [],
+          testResults: [],
+        }),
+        createPatchDraft(),
+        true,
+        true,
+      );
+
+      expect(implementationRequested).toBe(false);
+      expect(result.changedFiles).toEqual([]);
+      expect(result.reviewRequired).toBe(false);
+      expect(readFileSync(join(workspacePath, 'src', 'app.ts'), 'utf-8')).toBe('export const version = 0;\n');
+    } finally {
+      llmService.generateImplementationDraft = originalGenerateImplementationDraft;
+    }
+  });
+
+  test('skips generated file edits when the workspace is already dirty', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'openmeta-agent-dirty-'));
+    tempDirs.push(workspacePath);
+    mkdirSync(join(workspacePath, 'src'), { recursive: true });
+    writeFileSync(join(workspacePath, 'src', 'app.ts'), 'export const version = 0;\n', 'utf-8');
+
+    const originalGenerateImplementationDraft = llmService.generateImplementationDraft;
+    let implementationRequested = false;
+
+    try {
+      llmService.generateImplementationDraft = async () => {
+        implementationRequested = true;
+        return {
+          version: '1',
+          kind: 'implementation_draft',
+          status: 'success',
+          data: {
+            summary: 'Patch that should not be requested',
+            fileChanges: [
+              {
+                path: 'src/app.ts',
+                reason: 'Dirty workspaces should be protected',
+                content: 'export const version = 1;\n',
+              },
+            ],
+          },
+        };
+      };
+
+      const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+      const result = await orchestrator.generateConcretePatch(
+        createRankedIssue(),
+        createWorkspace({
+          workspacePath,
+          workspaceDirty: true,
+          snippets: [{ path: 'src/app.ts', content: 'export const version = 0;\n' }],
+          testCommands: [],
+          validationCommands: [],
+          validationWarnings: [],
+          testResults: [],
+        }),
+        createPatchDraft(),
+        true,
+      );
+
+      expect(implementationRequested).toBe(false);
       expect(result.changedFiles).toEqual([]);
       expect(result.reviewRequired).toBe(true);
       expect(readFileSync(join(workspacePath, 'src', 'app.ts'), 'utf-8')).toBe('export const version = 0;\n');

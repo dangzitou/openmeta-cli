@@ -5,6 +5,7 @@ import { simpleGit, type SimpleGit } from 'simple-git';
 import { ensureDirectory, getOpenMetaWorkspaceRoot, logger } from '../infra/index.js';
 import type {
   GeneratedFileChange,
+  GeneratedChangeApplyResult,
   RankedIssue,
   RepoMemory,
   RepoFileSnippet,
@@ -26,6 +27,8 @@ const EXCLUDED_DIRS = new Set([
 
 const MAX_DISCOVERED_FILES = 250;
 const MAX_SNIPPET_CHARS = 8000;
+const MAX_GENERATED_FILES = 6;
+const MAX_GENERATED_FILE_CHARS = 60_000;
 type ExecutionMode = 'interactive' | 'headless';
 
 function sanitizeRepoName(repoFullName: string): string {
@@ -105,24 +108,55 @@ export class WorkspaceService {
     };
   }
 
-  applyGeneratedChanges(workspacePath: string, fileChanges: GeneratedFileChange[]): string[] {
+  applyGeneratedChanges(
+    workspacePath: string,
+    fileChanges: GeneratedFileChange[],
+    options: { allowedPaths?: string[] } = {},
+  ): GeneratedChangeApplyResult {
     const rootPath = resolve(workspacePath);
+    const allowedPaths = new Set((options.allowedPaths ?? []).map((path) => path.replace(/^\/+/, '').trim()).filter(Boolean));
     const appliedFiles: string[] = [];
+    const skippedFiles: GeneratedChangeApplyResult['skippedFiles'] = [];
+
+    if (fileChanges.length > MAX_GENERATED_FILES) {
+      return {
+        appliedFiles: [],
+        skippedFiles: fileChanges.map((change) => ({
+          path: change.path,
+          reason: `Generated patch touches ${fileChanges.length} files; automatic apply limit is ${MAX_GENERATED_FILES}.`,
+        })),
+        reviewRequired: true,
+        reviewReason: `Generated patch touches ${fileChanges.length} files, which exceeds the automatic apply limit of ${MAX_GENERATED_FILES}.`,
+      };
+    }
 
     for (const change of fileChanges) {
       const relativePath = change.path.replace(/^\/+/, '').trim();
       if (!relativePath) {
+        skippedFiles.push({ path: change.path, reason: 'Generated path is empty.' });
         continue;
       }
 
       const targetPath = resolve(rootPath, relativePath);
       if (targetPath !== rootPath && !targetPath.startsWith(`${rootPath}${sep}`)) {
         logger.warn(`Skipping unsafe generated path outside the workspace: ${change.path}`);
+        skippedFiles.push({ path: change.path, reason: 'Generated path is outside the workspace.' });
+        continue;
+      }
+
+      if (allowedPaths.size > 0 && !allowedPaths.has(relativePath)) {
+        skippedFiles.push({ path: relativePath, reason: 'Generated path was not part of the selected implementation context.' });
+        continue;
+      }
+
+      if (change.content.length > MAX_GENERATED_FILE_CHARS) {
+        skippedFiles.push({ path: relativePath, reason: `Generated content exceeds ${MAX_GENERATED_FILE_CHARS} characters.` });
         continue;
       }
 
       const existingContent = existsSync(targetPath) ? readFileSync(targetPath, 'utf-8') : null;
       if (existingContent === change.content) {
+        skippedFiles.push({ path: relativePath, reason: 'Generated content is unchanged.' });
         continue;
       }
 
@@ -131,7 +165,18 @@ export class WorkspaceService {
       appliedFiles.push(relativePath);
     }
 
-    return appliedFiles;
+    const unsafeSkipped = skippedFiles.filter((file) =>
+      file.reason.includes('outside the workspace') ||
+      file.reason.includes('not part of the selected implementation context') ||
+      file.reason.includes('exceeds')
+    );
+
+    return {
+      appliedFiles,
+      skippedFiles,
+      reviewRequired: unsafeSkipped.length > 0,
+      reviewReason: unsafeSkipped.length > 0 ? unsafeSkipped.map((file) => `${file.path}: ${file.reason}`).join('; ') : undefined,
+    };
   }
 
   runValidationCommands(workspacePath: string, commands: TestCommand[]): TestResult[] {

@@ -44,6 +44,18 @@ export interface GeneratedFileChange {
   content: string;
 }
 
+export interface SkippedGeneratedFileChange {
+  path: string;
+  reason: string;
+}
+
+export interface GeneratedChangeApplyResult {
+  appliedFiles: string[];
+  skippedFiles: SkippedGeneratedFileChange[];
+  reviewRequired: boolean;
+  reviewReason?: string;
+}
+
 export interface ImplementationDraft {
   summary: string;
   fileChanges: GeneratedFileChange[];
@@ -170,4 +182,17 @@ export interface ContributionAgentResult {
   proofRecord: ProofOfWorkRecord;
   changedFiles?: string[];
   pullRequestUrl?: string;
+}
+
+export type AgentRunStatus = 'running' | 'success' | 'failed' | 'cancelled';
+
+export interface AgentRunRecord {
+  id: string;
+  commandName: string;
+  args: string[];
+  status: AgentRunStatus;
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  error?: string;
 }

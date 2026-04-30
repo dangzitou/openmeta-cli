@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { Octokit } from '@octokit/rest';
@@ -8,6 +8,7 @@ import type {
   AppConfig,
   ContributionAgentResult,
   RankedIssue,
+  RepoFileSnippet,
   RepoWorkspaceContext,
   TestResult,
 } from '../types/index.js';
@@ -24,12 +25,13 @@ import {
 } from '../infra/index.js';
 import {
   contentService,
+  contributionPrService,
   gitService,
   githubService,
   inboxService,
+  issueRankingService,
   llmService,
   memoryService,
-  opportunityService,
   proofOfWorkService,
   workspaceService,
 } from '../services/index.js';
@@ -39,6 +41,15 @@ export interface AgentRunOptions {
   force?: boolean;
   schedulerRun?: boolean;
   runChecks?: boolean;
+  draftOnly?: boolean;
+  refresh?: boolean;
+  dryRun?: boolean;
+}
+
+export interface ScoutRunOptions {
+  limit?: number;
+  refresh?: boolean;
+  localOnly?: boolean;
 }
 
 interface TargetRepoContext {
@@ -46,11 +57,6 @@ interface TargetRepoContext {
   owner: string;
   repo: string;
   defaultBranch: string;
-}
-
-interface DraftPullRequest {
-  title: string;
-  body: string;
 }
 
 interface ContributionPullRequestResult {
@@ -116,6 +122,8 @@ export class AgentOrchestrator {
     const headless = Boolean(options.headless);
     const schedulerRun = Boolean(options.schedulerRun);
     const runChecks = typeof options.runChecks === 'boolean' ? options.runChecks : !headless;
+    const draftOnly = Boolean(options.draftOnly);
+    const refresh = Boolean(options.refresh);
     const completedStages = new Set<AgentStageId>();
 
     ui.hero({
@@ -126,6 +134,8 @@ export class AgentOrchestrator {
         : 'OpenMeta will read the field, enter the repository, shape a patch direction, and leave behind artifacts that feel deliberate instead of improvised.',
       lines: [
         runChecks ? 'Baseline checks will fire wherever the repository exposes a safe command path.' : 'This pass will stay light and skip baseline checks.',
+        draftOnly ? 'Draft-only mode will preserve artifacts without applying generated file edits or opening a PR.' : 'Generated patches can be applied after repository safety checks pass.',
+        refresh ? 'Issue discovery will bypass the local search cache for this run.' : 'Issue discovery may reuse the short local search cache.',
         headless ? `Unattended selection honors the saved threshold at ${config.automation.minMatchScore}/100.` : 'You stay in control at each decision gate before anything is published.',
       ],
     });
@@ -144,7 +154,7 @@ export class AgentOrchestrator {
       doneMessage: 'Opportunity ranking complete',
       failedMessage: 'Opportunity ranking failed',
       tone: 'info',
-    }, async () => this.loadRankedIssues(config));
+    }, async () => issueRankingService.loadRankedIssues(config, { refresh }));
     if (rankedIssues.length === 0) {
       ui.emptyState(
         'OpenMeta Agent',
@@ -158,7 +168,7 @@ export class AgentOrchestrator {
     this.renderAgentStage('select', completedStages, 'Review the top ranked issues and choose the next contribution target.');
     this.renderOpportunityList('Top ranked opportunities', rankedIssues.slice(0, 5));
     const selectedIssue = headless
-      ? this.selectIssueForAutomation(rankedIssues, config.automation.minMatchScore)
+      ? issueRankingService.selectIssueForAutomation(rankedIssues, config.automation.minMatchScore)
       : await this.promptForIssue(rankedIssues);
 
     if (!selectedIssue) {
@@ -206,16 +216,17 @@ export class AgentOrchestrator {
         ],
       });
     }
+    const implementationWorkspace = this.buildImplementationWorkspace(workspace, patchDraft);
     const implementation = patchDraftResult.status === 'success'
-      ? await this.generateConcretePatch(selectedIssue, workspace, patchDraft, runChecks)
+      ? await this.generateConcretePatch(selectedIssue, implementationWorkspace, patchDraft, runChecks, draftOnly)
       : {
         changedFiles: [],
-        validationResults: workspace.testResults,
+        validationResults: implementationWorkspace.testResults,
         reviewRequired: true,
       };
     completedStages.add('draft');
     const workspaceForArtifacts: RepoWorkspaceContext = {
-      ...workspace,
+      ...implementationWorkspace,
       testResults: implementation.validationResults,
     };
 
@@ -322,6 +333,7 @@ export class AgentOrchestrator {
     const publishResult = await this.publishArtifactsIfNeeded({
       config,
       headless,
+      dryRun: options.dryRun,
       issue: selectedIssue,
       patchDraftMarkdown,
       prDraftMarkdown,
@@ -379,17 +391,24 @@ export class AgentOrchestrator {
     });
   }
 
-  async scout(limit: number = 10): Promise<void> {
+  async scout(options: ScoutRunOptions | number = {}): Promise<void> {
+    const limit = typeof options === 'number' ? options : options.limit ?? 10;
+    const refresh = typeof options === 'number' ? false : Boolean(options.refresh);
+    const localOnly = typeof options === 'number' ? false : Boolean(options.localOnly);
     const config = await configService.get();
-    await this.validateConfig(config);
-    await this.initializeClients(config);
+    await this.validateConfig(config, { requireLlm: !localOnly });
+    await this.initializeClients(config, { validateLlm: !localOnly });
 
     ui.hero({
       label: 'OpenMeta Scout',
-      title: 'Read the field before you spend your focus',
-      subtitle: 'OpenMeta turns a noisy issue stream into a shortlist shaped by technical fit, timing, and real opening momentum.',
+      title: localOnly ? 'Read the field while the model stays offline' : 'Read the field before you spend your focus',
+      subtitle: localOnly
+        ? 'OpenMeta will use local profile heuristics to keep scouting useful even when the LLM provider is unavailable.'
+        : 'OpenMeta turns a noisy issue stream into a shortlist shaped by technical fit, timing, and real opening momentum.',
       lines: [
         `Saved threshold reference: ${config.automation.minMatchScore}/100.`,
+        refresh ? 'This scout run will ignore the local GitHub issue cache.' : 'This scout run may reuse the short local GitHub issue cache.',
+        localOnly ? 'LLM validation and model scoring are skipped for this run.' : 'LLM scoring will refine the local candidate shortlist.',
       ],
     });
 
@@ -398,7 +417,7 @@ export class AgentOrchestrator {
       doneMessage: 'Contribution opportunities scored',
       failedMessage: 'Contribution opportunity scoring failed',
       tone: 'info',
-    }, async () => this.loadRankedIssues(config));
+    }, async () => issueRankingService.loadRankedIssues(config, { refresh, localOnly }));
     if (rankedIssues.length === 0) {
       ui.emptyState('OpenMeta Scout', 'No issues found', 'No issues met the current scoring thresholds.');
       return;
@@ -410,7 +429,7 @@ export class AgentOrchestrator {
       { label: 'Top score', value: String(rankedIssues[0]?.opportunity.overallScore || 0), tone: 'accent' },
       { label: 'Profile threshold', value: `${config.automation.minMatchScore}`, tone: 'info' },
     ]);
-    this.renderOpportunityList('Ranked opportunities', rankedIssues.slice(0, limit));
+    this.renderOpportunityList('Ranked opportunities', issueRankingService.diversifyScoutIssues(rankedIssues, limit));
   }
 
   async showInbox(): Promise<void> {
@@ -697,17 +716,26 @@ export class AgentOrchestrator {
     ]);
   }
 
-  private async validateConfig(config: AppConfig): Promise<void> {
+  private async validateConfig(
+    config: AppConfig,
+    options: { requireLlm?: boolean } = {},
+  ): Promise<void> {
+    const requireLlm = options.requireLlm ?? true;
+
     if (!config.github.pat || !config.github.username) {
       throw new Error('GitHub configuration is incomplete. Please run "openmeta init" first.');
     }
 
-    if (!config.llm.apiKey) {
+    if (requireLlm && !config.llm.apiKey) {
       throw new Error('LLM API configuration is incomplete. Please run "openmeta init" first.');
     }
   }
 
-  private async initializeClients(config: AppConfig): Promise<void> {
+  private async initializeClients(
+    config: AppConfig,
+    options: { validateLlm?: boolean } = {},
+  ): Promise<void> {
+    const validateLlm = options.validateLlm ?? true;
     githubService.initialize(config.github.pat, config.github.username);
     const ghValid = await ui.task({
       title: 'Validating GitHub access',
@@ -726,13 +754,12 @@ export class AgentOrchestrator {
     }
 
     this.octokit = new Octokit({ auth: config.github.pat });
-    llmService.initialize(
-      config.llm.apiKey,
-      config.llm.apiBaseUrl,
-      config.llm.modelName,
-      config.llm.apiHeaders,
-      config.llm.provider,
-    );
+    contributionPrService.initialize(this.octokit);
+    if (!validateLlm) {
+      return;
+    }
+
+    llmService.initialize(config.llm.apiKey, config.llm.apiBaseUrl, config.llm.modelName, config.llm.apiHeaders, config.llm.provider);
     const llmValid = await ui.task({
       title: 'Validating LLM provider',
       doneMessage: 'LLM provider verified',
@@ -741,45 +768,14 @@ export class AgentOrchestrator {
     }, async () => {
       const valid = await llmService.validateConnection();
       if (!valid) {
-        throw new Error('LLM validation failed');
+        const detail = llmService.getLastValidationError();
+        throw new Error(`LLM validation failed${detail ? `: ${detail}` : ''}`);
       }
       return true;
     });
     if (!llmValid) {
       throw new Error('LLM API connection failed. Run "openmeta init" to update your provider settings.');
     }
-  }
-
-  private async loadRankedIssues(config: AppConfig): Promise<RankedIssue[]> {
-    const issues = await githubService.fetchTrendingIssues();
-    const matched = await this.scoreIssuesInBatches(config.userProfile, issues);
-    return opportunityService.rankIssues(matched);
-  }
-
-  private async scoreIssuesInBatches(
-    userProfile: AppConfig['userProfile'],
-    issues: Awaited<ReturnType<typeof githubService.fetchTrendingIssues>>,
-  ) {
-    const batchSize = 20;
-    const matches = [];
-
-    for (let start = 0; start < Math.min(issues.length, 80); start += batchSize) {
-      const batch = issues.slice(start, start + batchSize);
-      const scoredBatch = await llmService.scoreIssues(userProfile, batch);
-      if (scoredBatch.status !== 'success') {
-        logger.warn('Issue scoring returned advisory results that require review. Continuing with the parsed matches only.');
-      }
-      matches.push(...scoredBatch.data);
-      if (matches.length >= 20) {
-        break;
-      }
-    }
-
-    return matches;
-  }
-
-  private selectIssueForAutomation(issues: RankedIssue[], minOverallScore: number): RankedIssue | undefined {
-    return issues.find((issue) => issue.opportunity.overallScore >= minOverallScore);
   }
 
   private async promptForIssue(issues: RankedIssue[]): Promise<RankedIssue> {
@@ -873,12 +869,110 @@ export class AgentOrchestrator {
     writeFileSync(input.artifacts.proofOfWorkPath, input.proofMarkdown, 'utf-8');
   }
 
+  private buildImplementationWorkspace(
+    workspace: RepoWorkspaceContext,
+    patchDraft: PatchDraft,
+  ): RepoWorkspaceContext {
+    const patchPaths = this.collectPatchDraftPaths(patchDraft);
+    const existingSnippetPaths = new Set(workspace.snippets.map((snippet) => snippet.path));
+    const missingSnippetPaths = patchPaths.filter((path) => !existingSnippetPaths.has(path));
+    const extraSnippets = workspaceService
+      .readWorkspaceFiles(workspace.workspacePath, missingSnippetPaths)
+      .filter((snippet) => snippet.content.trim().length > 0);
+
+    if (extraSnippets.length === 0 && patchPaths.every((path) => workspace.candidateFiles.includes(path))) {
+      return workspace;
+    }
+
+    if (extraSnippets.length > 0) {
+      logger.info(`Loaded ${extraSnippets.length} patch target file(s) into implementation context.`);
+    }
+
+    return {
+      ...workspace,
+      candidateFiles: this.uniqueStrings([
+        ...workspace.candidateFiles,
+        ...patchPaths,
+      ]),
+      snippets: this.mergeSnippets(workspace.snippets, extraSnippets),
+    };
+  }
+
+  private collectPatchDraftPaths(patchDraft: PatchDraft): string[] {
+    return this.uniqueStrings([
+      ...patchDraft.targetFiles.map((file) => file.path),
+      ...patchDraft.proposedChanges.flatMap((change) => change.files),
+    ].flatMap((path) => {
+      const normalized = this.normalizePatchPath(path);
+      return normalized ? [normalized] : [];
+    }));
+  }
+
+  private normalizePatchPath(path: string): string | null {
+    const normalized = path.replace(/^\/+/, '').trim();
+    if (!normalized || normalized.split(/[\\/]/).includes('..')) {
+      return null;
+    }
+
+    return normalized;
+  }
+
+  private mergeSnippets(current: RepoFileSnippet[], next: RepoFileSnippet[]): RepoFileSnippet[] {
+    const snippets = new Map<string, RepoFileSnippet>();
+
+    for (const snippet of [...current, ...next]) {
+      if (!snippets.has(snippet.path)) {
+        snippets.set(snippet.path, snippet);
+      }
+    }
+
+    return [...snippets.values()];
+  }
+
+  private uniqueStrings(values: string[]): string[] {
+    return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+  }
+
   private async generateConcretePatch(
     issue: RankedIssue,
     workspace: RepoWorkspaceContext,
     patchDraft: PatchDraft,
     runChecks: boolean,
+    draftOnly: boolean = false,
   ): Promise<ConcretePatchResult> {
+    if (draftOnly) {
+      ui.callout({
+        label: 'OpenMeta Agent',
+        title: 'Draft-only mode is active',
+        subtitle: 'OpenMeta will keep the patch strategy and PR narrative as artifacts without modifying repository files or opening a real PR.',
+        tone: 'info',
+      });
+      logger.info('Skipping generated file edits because draft-only mode is active.');
+      return {
+        changedFiles: [],
+        validationResults: workspace.testResults,
+        reviewRequired: false,
+      };
+    }
+
+    if (workspace.workspaceDirty) {
+      ui.callout({
+        label: 'OpenMeta Agent',
+        title: 'Workspace has existing local changes',
+        subtitle: 'OpenMeta will not apply generated file edits into a dirty workspace. Commit, stash, or review the existing changes before asking for an automatic patch.',
+        lines: [
+          `Workspace: ${workspace.workspacePath}`,
+        ],
+        tone: 'warning',
+      });
+      logger.warn(`Skipping generated file edits because the workspace is dirty: ${workspace.workspacePath}`);
+      return {
+        changedFiles: [],
+        validationResults: workspace.testResults,
+        reviewRequired: true,
+      };
+    }
+
     try {
       const implementation = await ui.task({
         title: 'Generating concrete patch',
@@ -929,13 +1023,33 @@ export class AgentOrchestrator {
         doneMessage: 'Generated file edits applied',
         failedMessage: 'Generated file edits failed to apply',
         tone: 'info',
-      }, async () => workspaceService.applyGeneratedChanges(workspace.workspacePath, implementation.data.fileChanges));
-      if (changedFiles.length === 0) {
+      }, async () => workspaceService.applyGeneratedChanges(workspace.workspacePath, implementation.data.fileChanges, {
+        allowedPaths: workspace.snippets.map((snippet) => snippet.path),
+      }));
+      if (changedFiles.reviewRequired) {
+        this.showStructuredReviewNotice({
+          title: 'Generated patch needs manual review',
+          subtitle: 'OpenMeta refused to apply one or more generated edits because they reached outside the selected implementation context.',
+          lines: [
+            changedFiles.reviewReason || 'Review the generated patch before applying it manually.',
+          ],
+        });
+        logger.warn(`Generated patch requires review: ${changedFiles.reviewReason || 'unspecified reason'}`);
+        return {
+          changedFiles: changedFiles.appliedFiles,
+          validationResults: workspace.testResults,
+          reviewRequired: true,
+        };
+      }
+      if (changedFiles.appliedFiles.length === 0) {
         ui.callout({
           label: 'OpenMeta Agent',
           title: 'Generated edits produced no file changes',
           subtitle: 'The proposed patch matched the current workspace or resolved to no effective write.',
-          lines: ['Draft artifacts will still be preserved for manual follow-up.'],
+          lines: [
+            'Draft artifacts will still be preserved for manual follow-up.',
+            ...changedFiles.skippedFiles.slice(0, 3).map((file) => `${file.path}: ${file.reason}`),
+          ],
           tone: 'warning',
         });
         logger.warn('The generated patch did not change any files in the workspace. Continuing with draft artifacts only.');
@@ -946,7 +1060,7 @@ export class AgentOrchestrator {
         };
       }
 
-      logger.success(`Applied ${changedFiles.length} workspace file updates`);
+      logger.success(`Applied ${changedFiles.appliedFiles.length} workspace file updates`);
 
       const validationResults = runChecks && workspace.validationCommands.length > 0
         ? await ui.task({
@@ -957,12 +1071,12 @@ export class AgentOrchestrator {
         }, async () => workspaceService.runValidationCommands(workspace.workspacePath, workspace.validationCommands.slice(0, 3)))
         : workspace.testResults;
 
-      if (runChecks && changedFiles.length > 0 && this.hasBlockingValidationFailures(validationResults)) {
+      if (runChecks && changedFiles.appliedFiles.length > 0 && this.hasBlockingValidationFailures(validationResults)) {
         const repaired = await this.attemptValidationRepair({
           issue,
           workspace,
           patchDraft,
-          changedFiles,
+          changedFiles: changedFiles.appliedFiles,
           validationResults,
         });
 
@@ -972,7 +1086,7 @@ export class AgentOrchestrator {
       }
 
       return {
-        changedFiles,
+        changedFiles: changedFiles.appliedFiles,
         validationResults,
         reviewRequired: false,
       };
@@ -990,6 +1104,7 @@ export class AgentOrchestrator {
     config: AppConfig;
     allowRealPr?: boolean;
     headless: boolean;
+    dryRun?: boolean;
     issue: RankedIssue;
     patchDraftMarkdown: string;
     prDraftMarkdown: string;
@@ -1002,6 +1117,32 @@ export class AgentOrchestrator {
     pullRequestUrl?: string;
   }): Promise<{ published: boolean }> {
     const artifactRelativeDir = join('contributions', getLocalDateStamp(), `${input.issue.repoFullName.replace(/\//g, '__')}__${input.issue.number}`);
+
+    if (input.dryRun) {
+      ui.callout({
+        label: 'Dry-run Mode',
+        title: 'Artifact preview (no git changes)',
+        subtitle: 'The following artifacts would be published:',
+        lines: [
+          `${artifactRelativeDir}/dossier.md`,
+          `${artifactRelativeDir}/patch-draft.md`,
+          `${artifactRelativeDir}/pr-draft.md`,
+          `memory/${input.issue.repoFullName.replace(/\//g, '__')}.md`,
+          'INBOX.md',
+          'PROOF_OF_WORK.md',
+        ],
+        tone: 'info',
+      });
+
+      ui.keyValues('Dry-run preview', [
+        { label: 'Issue', value: `${input.issue.repoFullName}#${input.issue.number}` },
+        { label: 'Dossier', value: input.dossier.slice(0, 100) + '...' },
+        { label: 'Changed files', value: input.changedFiles.length > 0 ? input.changedFiles.join(', ') : '(none)' },
+      ]);
+
+      return { published: false };
+    }
+
     const shouldCommit = input.headless ? true : await this.promptForCommitConfirmation();
     if (!shouldCommit) {
       return { published: false };
@@ -1121,21 +1262,12 @@ export class AgentOrchestrator {
     }
 
     try {
-      const upstreamRepo = await this.getUpstreamRepositoryContext(input.issue);
-      const forkRepo = await this.ensureForkRepository(upstreamRepo);
-      const branchName = this.buildPublishBranchName(input.issue);
-      const draftPullRequest = this.buildDraftPullRequest(input.prDraft);
-      const commitMessage = this.buildContributionCommitMessage(input.issue);
-
-      await this.createCommitOnFork({
-        forkRepo,
-        branchName,
+      const contributionPullRequest = await contributionPrService.submitDraftPullRequest({
+        issue: input.issue,
+        prDraft: input.prDraft,
         workspacePath: input.workspace.workspacePath,
         changedFiles: input.changedFiles,
-        commitMessage,
       });
-
-      const contributionPullRequest = await this.createContributionPullRequest(upstreamRepo, forkRepo.owner, branchName, draftPullRequest);
 
       ui.card({
         label: 'OpenMeta Agent',
@@ -1143,7 +1275,7 @@ export class AgentOrchestrator {
         subtitle: 'The generated patch has been pushed to your fork and turned into a real upstream draft PR.',
         lines: [
           `Repository: ${input.issue.repoFullName}`,
-          `Branch: ${branchName}`,
+          `Branch: ${contributionPullRequest.branchName}`,
           `Changed Files: ${input.changedFiles.join(', ')}`,
           `Pull Request: ${contributionPullRequest.url}`,
         ],
@@ -1151,7 +1283,7 @@ export class AgentOrchestrator {
       });
 
       return {
-        branchName,
+        branchName: contributionPullRequest.branchName,
         url: contributionPullRequest.url,
         number: contributionPullRequest.number,
         changedFiles: input.changedFiles,
@@ -1354,9 +1486,27 @@ export class AgentOrchestrator {
       doneMessage: 'Validation repair edits applied',
       failedMessage: 'Validation repair edits failed to apply',
       tone: 'info',
-    }, async () => workspaceService.applyGeneratedChanges(input.workspace.workspacePath, repairDraft.data.fileChanges));
+    }, async () => workspaceService.applyGeneratedChanges(input.workspace.workspacePath, repairDraft.data.fileChanges, {
+      allowedPaths: input.changedFiles,
+    }));
 
-    if (repairedFiles.length === 0) {
+    if (repairedFiles.reviewRequired) {
+      this.showStructuredReviewNotice({
+        title: 'Validation repair needs manual review',
+        subtitle: 'OpenMeta refused to apply one or more repair edits because they reached outside the changed file set.',
+        lines: [
+          repairedFiles.reviewReason || 'Review the generated repair before applying it manually.',
+        ],
+      });
+      logger.warn(`Validation repair requires review: ${repairedFiles.reviewReason || 'unspecified reason'}`);
+      return {
+        changedFiles: input.changedFiles,
+        validationResults: input.validationResults,
+        reviewRequired: true,
+      };
+    }
+
+    if (repairedFiles.appliedFiles.length === 0) {
       logger.warn('Validation repair pass produced no effective file changes.');
       return null;
     }
@@ -1372,7 +1522,7 @@ export class AgentOrchestrator {
     ));
 
     return {
-      changedFiles: [...new Set([...input.changedFiles, ...repairedFiles])],
+      changedFiles: [...new Set([...input.changedFiles, ...repairedFiles.appliedFiles])],
       validationResults,
       reviewRequired: false,
     };
@@ -1504,7 +1654,7 @@ export class AgentOrchestrator {
       const { data } = await this.octokit.rest.repos.createForAuthenticatedUser({
         name: repoName,
         private: true,
-        auto_init: false,
+        auto_init: true,
         description: 'OpenMeta contribution dossiers and proof of work',
       });
 
@@ -1568,23 +1718,6 @@ export class AgentOrchestrator {
     return data;
   }
 
-  private buildPublishBranchName(issue: RankedIssue): string {
-    const slug = issue.title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 32);
-
-    return `openmeta/agent-${issue.number}-${slug || 'issue'}-${Date.now()}`;
-  }
-
-  private buildDraftPullRequest(prDraft: PullRequestDraft): DraftPullRequest {
-    return {
-      title: prDraft.title,
-      body: contentService.formatPullRequestDraftBody(prDraft),
-    };
-  }
-
   private showStructuredReviewNotice(input: {
     title: string;
     subtitle: string;
@@ -1596,223 +1729,6 @@ export class AgentOrchestrator {
       subtitle: input.subtitle,
       lines: input.lines,
       tone: 'warning',
-    });
-  }
-
-  private async getUpstreamRepositoryContext(issue: RankedIssue): Promise<TargetRepoContext> {
-    const [owner, repo] = issue.repoFullName.split('/');
-    if (!owner || !repo) {
-      throw new Error(`Invalid issue repository reference: ${issue.repoFullName}`);
-    }
-
-    const repoInfo = await this.getGitHubRepositoryInfo(owner, repo);
-    return {
-      path: '',
-      owner,
-      repo,
-      defaultBranch: repoInfo.default_branch || 'main',
-    };
-  }
-
-  private async ensureForkRepository(upstreamRepo: TargetRepoContext): Promise<TargetRepoContext> {
-    if (!this.octokit) {
-      throw new Error('GitHub service not initialized');
-    }
-
-    const forkOwner = githubService.getUsername();
-
-    try {
-      const { data } = await this.octokit.rest.repos.get({
-        owner: forkOwner,
-        repo: upstreamRepo.repo,
-      });
-
-      if (!data.fork || data.parent?.full_name !== `${upstreamRepo.owner}/${upstreamRepo.repo}`) {
-        throw new Error(`Repository ${forkOwner}/${upstreamRepo.repo} exists but is not a fork of ${upstreamRepo.owner}/${upstreamRepo.repo}.`);
-      }
-
-      await this.syncForkWithUpstream(forkOwner, upstreamRepo.repo, data.default_branch || upstreamRepo.defaultBranch);
-      return {
-        path: '',
-        owner: forkOwner,
-        repo: upstreamRepo.repo,
-        defaultBranch: data.default_branch || upstreamRepo.defaultBranch,
-      };
-    } catch (error) {
-      const err = error as { status?: number };
-      if (err.status && err.status !== 404) {
-        throw error;
-      }
-    }
-
-    logger.info(`Creating fork for ${upstreamRepo.owner}/${upstreamRepo.repo}`);
-    await this.octokit.rest.repos.createFork({
-      owner: upstreamRepo.owner,
-      repo: upstreamRepo.repo,
-    });
-
-    const fork = await this.waitForFork(forkOwner, upstreamRepo.repo, `${upstreamRepo.owner}/${upstreamRepo.repo}`);
-    await this.syncForkWithUpstream(forkOwner, upstreamRepo.repo, fork.default_branch || upstreamRepo.defaultBranch);
-
-    return {
-      path: '',
-      owner: forkOwner,
-      repo: upstreamRepo.repo,
-      defaultBranch: fork.default_branch || upstreamRepo.defaultBranch,
-    };
-  }
-
-  private async waitForFork(owner: string, repo: string, expectedParent: string) {
-    if (!this.octokit) {
-      throw new Error('GitHub service not initialized');
-    }
-
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      try {
-        const { data } = await this.octokit.rest.repos.get({ owner, repo });
-        if (data.fork && data.parent?.full_name === expectedParent) {
-          return data;
-        }
-      } catch {
-        // Continue polling until the fork is visible.
-      }
-
-      await this.delay(1500);
-    }
-
-    throw new Error(`Fork ${owner}/${repo} was not ready in time.`);
-  }
-
-  private async syncForkWithUpstream(owner: string, repo: string, branch: string): Promise<void> {
-    if (!this.octokit) {
-      throw new Error('GitHub service not initialized');
-    }
-
-    try {
-      await this.octokit.rest.repos.mergeUpstream({
-        owner,
-        repo,
-        branch,
-      });
-    } catch (error) {
-      logger.debug(`Unable to sync fork ${owner}/${repo} with upstream before opening a PR`, error);
-    }
-  }
-
-  private async createCommitOnFork(input: {
-    forkRepo: TargetRepoContext;
-    branchName: string;
-    workspacePath: string;
-    changedFiles: string[];
-    commitMessage: string;
-  }): Promise<void> {
-    if (!this.octokit) {
-      throw new Error('GitHub service not initialized');
-    }
-
-    const branch = await this.octokit.rest.repos.getBranch({
-      owner: input.forkRepo.owner,
-      repo: input.forkRepo.repo,
-      branch: input.forkRepo.defaultBranch,
-    });
-
-    const baseCommitSha = branch.data.commit.sha;
-    const baseTreeSha = branch.data.commit.commit.tree.sha;
-
-    const tree = input.changedFiles.map((filePath) => ({
-      path: filePath,
-      mode: '100644' as const,
-      type: 'blob' as const,
-      content: readFileSync(join(input.workspacePath, filePath), 'utf-8'),
-    }));
-
-    const createdTree = await this.octokit.rest.git.createTree({
-      owner: input.forkRepo.owner,
-      repo: input.forkRepo.repo,
-      base_tree: baseTreeSha,
-      tree,
-    });
-
-    const createdCommit = await this.octokit.rest.git.createCommit({
-      owner: input.forkRepo.owner,
-      repo: input.forkRepo.repo,
-      message: input.commitMessage,
-      tree: createdTree.data.sha,
-      parents: [baseCommitSha],
-    });
-
-    try {
-      await this.octokit.rest.git.createRef({
-        owner: input.forkRepo.owner,
-        repo: input.forkRepo.repo,
-        ref: `refs/heads/${input.branchName}`,
-        sha: createdCommit.data.sha,
-      });
-    } catch (error) {
-      const err = error as { status?: number };
-      if (err.status !== 422) {
-        throw error;
-      }
-
-      await this.octokit.rest.git.updateRef({
-        owner: input.forkRepo.owner,
-        repo: input.forkRepo.repo,
-        ref: `heads/${input.branchName}`,
-        sha: createdCommit.data.sha,
-        force: true,
-      });
-    }
-  }
-
-  private async createContributionPullRequest(
-    upstreamRepo: TargetRepoContext,
-    forkOwner: string,
-    branchName: string,
-    draftPullRequest: DraftPullRequest,
-  ): Promise<{ url: string; number: number }> {
-    if (!this.octokit) {
-      throw new Error('GitHub service not initialized');
-    }
-
-    const existing = await this.octokit.rest.pulls.list({
-      owner: upstreamRepo.owner,
-      repo: upstreamRepo.repo,
-      head: `${forkOwner}:${branchName}`,
-      base: upstreamRepo.defaultBranch,
-      state: 'open',
-    });
-
-    const [existingPullRequest] = existing.data;
-    if (existingPullRequest) {
-      return {
-        url: existingPullRequest.html_url,
-        number: existingPullRequest.number,
-      };
-    }
-
-    const { data } = await this.octokit.rest.pulls.create({
-      owner: upstreamRepo.owner,
-      repo: upstreamRepo.repo,
-      title: draftPullRequest.title,
-      body: draftPullRequest.body,
-      head: `${forkOwner}:${branchName}`,
-      base: upstreamRepo.defaultBranch,
-      draft: true,
-    });
-
-    return {
-      url: data.html_url,
-      number: data.number,
-    };
-  }
-
-  private buildContributionCommitMessage(issue: RankedIssue): string {
-    return `feat: address ${issue.repoFullName}#${issue.number} ${issue.title}`.slice(0, 120);
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      setTimeout(resolve, ms);
     });
   }
 
@@ -1837,6 +1753,14 @@ export class AgentOrchestrator {
       await git.checkoutLocalBranch(defaultBranch);
     } catch {
       await git.checkout(['-B', defaultBranch]);
+    }
+
+    // If the remote has no commits yet (newly created empty repo), push an initial commit
+    // so that subsequent branch pushes have a valid base ref on the remote.
+    const status = await git.status();
+    if (!status.tracking) {
+      await git.commit('chore: initialize repository', { '--allow-empty': null });
+      await git.raw(['push', '--set-upstream', 'origin', defaultBranch]);
     }
   }
 }
