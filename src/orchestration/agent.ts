@@ -25,6 +25,7 @@ import {
 } from '../infra/index.js';
 import {
   contentService,
+  contextBudgetService,
   contributionPrService,
   gitService,
   githubService,
@@ -75,6 +76,7 @@ interface ConcretePatchResult {
 
 type AgentStageId = 'scout' | 'select' | 'prepare' | 'draft' | 'validate' | 'pr' | 'publish';
 const ARTIFACT_PUBLISH_BRANCH = 'openmeta-artifacts';
+const MAX_CONTEXT_EXPANSION_ROUNDS = 3;
 
 const AGENT_STAGES: Array<{ id: AgentStageId; label: string; description: string }> = [
   {
@@ -974,12 +976,53 @@ export class AgentOrchestrator {
     }
 
     try {
-      const implementation = await ui.task({
+      let implementationWorkspace = workspace;
+      let implementation = await ui.task({
         title: 'Generating concrete patch',
         doneMessage: 'Concrete patch generated',
         failedMessage: 'Concrete patch generation failed',
         tone: 'info',
-      }, async () => llmService.generateImplementationDraft(issue, workspace, patchDraft));
+      }, async () => llmService.generateImplementationDraft(issue, implementationWorkspace, patchDraft));
+
+      for (let round = 1; implementation.status !== 'success' && round <= MAX_CONTEXT_EXPANSION_ROUNDS; round += 1) {
+        if (!this.isInsufficientContextReview(implementation.data.summary)) {
+          break;
+        }
+
+        const previousSnippetCount = implementationWorkspace.snippets.length;
+        implementationWorkspace = workspaceService.expandImplementationContext({
+          issue,
+          patchDraft,
+          workspace: implementationWorkspace,
+          round,
+        });
+        const addedFiles = implementationWorkspace.snippets.length - previousSnippetCount;
+        const budgeted = contextBudgetService.applySnippetBudget(implementationWorkspace.snippets, {
+          priorityPaths: [
+            ...patchDraft.targetFiles.map((file) => file.path),
+            ...patchDraft.proposedChanges.flatMap((change) => change.files),
+          ],
+        });
+        ui.keyValues('Context expansion', [
+          { label: 'Round', value: `${round}/${MAX_CONTEXT_EXPANSION_ROUNDS}`, tone: 'info' },
+          { label: 'Added files', value: String(Math.max(0, addedFiles)), tone: addedFiles > 0 ? 'success' : 'muted' },
+          { label: 'Editable files', value: String(implementationWorkspace.snippets.length), tone: 'info' },
+          { label: 'Estimated tokens', value: String(budgeted.estimatedTokens), tone: budgeted.compressed ? 'warning' : 'info' },
+          { label: 'Compressed', value: budgeted.compressed ? 'yes' : 'no', tone: budgeted.compressed ? 'warning' : 'muted' },
+        ]);
+
+        if (addedFiles <= 0) {
+          break;
+        }
+
+        implementation = await ui.task({
+          title: `Retrying concrete patch with expanded context (${round}/${MAX_CONTEXT_EXPANSION_ROUNDS})`,
+          doneMessage: 'Concrete patch retry generated',
+          failedMessage: 'Concrete patch retry failed',
+          tone: 'info',
+        }, async () => llmService.generateImplementationDraft(issue, implementationWorkspace, patchDraft));
+      }
+
       if (implementation.status !== 'success') {
         this.showStructuredReviewNotice({
           title: 'Concrete patch requires review',
@@ -991,7 +1034,7 @@ export class AgentOrchestrator {
         logger.warn('Skipping automatic file edits because the implementation draft requires review.');
         return {
           changedFiles: [],
-          validationResults: workspace.testResults,
+          validationResults: implementationWorkspace.testResults,
           reviewRequired: true,
         };
       }
@@ -1007,7 +1050,7 @@ export class AgentOrchestrator {
         logger.warn('OpenMeta could not produce a safe concrete patch from the available repo context. Continuing with draft artifacts only.');
         return {
           changedFiles: [],
-          validationResults: workspace.testResults,
+          validationResults: implementationWorkspace.testResults,
           reviewRequired: false,
         };
       }
@@ -1023,8 +1066,8 @@ export class AgentOrchestrator {
         doneMessage: 'Generated file edits applied',
         failedMessage: 'Generated file edits failed to apply',
         tone: 'info',
-      }, async () => workspaceService.applyGeneratedChanges(workspace.workspacePath, implementation.data.fileChanges, {
-        allowedPaths: workspace.snippets.map((snippet) => snippet.path),
+      }, async () => workspaceService.applyGeneratedChanges(implementationWorkspace.workspacePath, implementation.data.fileChanges, {
+        allowedPaths: implementationWorkspace.snippets.map((snippet) => snippet.path),
       }));
       if (changedFiles.reviewRequired) {
         this.showStructuredReviewNotice({
@@ -1037,7 +1080,7 @@ export class AgentOrchestrator {
         logger.warn(`Generated patch requires review: ${changedFiles.reviewReason || 'unspecified reason'}`);
         return {
           changedFiles: changedFiles.appliedFiles,
-          validationResults: workspace.testResults,
+          validationResults: implementationWorkspace.testResults,
           reviewRequired: true,
         };
       }
@@ -1055,26 +1098,26 @@ export class AgentOrchestrator {
         logger.warn('The generated patch did not change any files in the workspace. Continuing with draft artifacts only.');
         return {
           changedFiles: [],
-          validationResults: workspace.testResults,
+          validationResults: implementationWorkspace.testResults,
           reviewRequired: false,
         };
       }
 
       logger.success(`Applied ${changedFiles.appliedFiles.length} workspace file updates`);
 
-      const validationResults = runChecks && workspace.validationCommands.length > 0
+      const validationResults = runChecks && implementationWorkspace.validationCommands.length > 0
         ? await ui.task({
           title: 'Running baseline validation commands',
           doneMessage: 'Baseline validation complete',
           failedMessage: 'Baseline validation finished with issues',
           tone: 'info',
-        }, async () => workspaceService.runValidationCommands(workspace.workspacePath, workspace.validationCommands.slice(0, 3)))
-        : workspace.testResults;
+        }, async () => workspaceService.runValidationCommands(implementationWorkspace.workspacePath, implementationWorkspace.validationCommands.slice(0, 3)))
+        : implementationWorkspace.testResults;
 
       if (runChecks && changedFiles.appliedFiles.length > 0 && this.hasBlockingValidationFailures(validationResults)) {
         const repaired = await this.attemptValidationRepair({
           issue,
-          workspace,
+          workspace: implementationWorkspace,
           patchDraft,
           changedFiles: changedFiles.appliedFiles,
           validationResults,
@@ -1417,6 +1460,18 @@ export class AgentOrchestrator {
 
   private hasBlockingValidationFailures(results: TestResult[]): boolean {
     return results.some((result) => !result.passed && !this.isInfrastructureValidationFailure(result));
+  }
+
+  private isInsufficientContextReview(summary: string): boolean {
+    const normalized = summary.toLowerCase();
+    return [
+      'insufficient context',
+      'missing context',
+      'not enough context',
+      'no editable files',
+      'could not determine',
+      'needs more context',
+    ].some((signal) => normalized.includes(signal));
   }
 
   private isInfrastructureValidationFailure(result: TestResult): boolean {

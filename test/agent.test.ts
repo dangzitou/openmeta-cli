@@ -272,6 +272,143 @@ describe('AgentOrchestrator patch workflow', () => {
     }
   });
 
+  test('retries implementation after expanding insufficient context', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'openmeta-agent-expanded-context-'));
+    tempDirs.push(workspacePath);
+    mkdirSync(join(workspacePath, 'src'), { recursive: true });
+    writeFileSync(join(workspacePath, 'src', 'app.ts'), 'export const version = 0;\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'src', 'extra.ts'), 'export const extra = true;\n', 'utf-8');
+
+    const originalGenerateImplementationDraft = llmService.generateImplementationDraft;
+    let implementationCalls = 0;
+
+    try {
+      llmService.generateImplementationDraft = async (_issue, workspace) => {
+        implementationCalls += 1;
+        const hasExtraContext = workspace.snippets.some((snippet) => snippet.path === 'src/extra.ts');
+        return hasExtraContext
+          ? {
+            version: '1',
+            kind: 'implementation_draft',
+            status: 'success',
+            data: {
+              summary: 'Patch with expanded context',
+              fileChanges: [
+                {
+                  path: 'src/extra.ts',
+                  reason: 'Apply the safe implementation after loading context',
+                  content: 'export const extra = "patched";\n',
+                },
+              ],
+            },
+          }
+          : {
+            version: '1',
+            kind: 'implementation_draft',
+            status: 'needs_review',
+            data: {
+              summary: 'Insufficient context for a safe code patch.',
+              fileChanges: [],
+            },
+          };
+      };
+
+      const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+      const result = await orchestrator.generateConcretePatch(
+        createRankedIssue({
+          title: 'Update extra behavior',
+          body: 'The implementation is in src/extra.ts.',
+        }),
+        createWorkspace({
+          workspacePath,
+          candidateFiles: ['src/app.ts'],
+          snippets: [{ path: 'src/app.ts', content: 'export const version = 0;\n' }],
+          testCommands: [],
+          validationCommands: [],
+          validationWarnings: [],
+          testResults: [],
+        }),
+        createPatchDraft({
+          targetFiles: [{ path: 'src/extra.ts', reason: 'Missing implementation context' }],
+          proposedChanges: [
+            {
+              title: 'Patch extra behavior',
+              details: 'Update the extra behavior.',
+              files: ['src/extra.ts'],
+            },
+          ],
+        }),
+        false,
+      );
+
+      expect(implementationCalls).toBe(2);
+      expect(result.changedFiles).toEqual(['src/extra.ts']);
+      expect(result.reviewRequired).toBe(false);
+      expect(readFileSync(join(workspacePath, 'src', 'extra.ts'), 'utf-8')).toBe('export const extra = "patched";\n');
+    } finally {
+      llmService.generateImplementationDraft = originalGenerateImplementationDraft;
+    }
+  });
+
+  test('stops context expansion after the bounded retry limit', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'openmeta-agent-context-limit-'));
+    tempDirs.push(workspacePath);
+    mkdirSync(join(workspacePath, 'src'), { recursive: true });
+    writeFileSync(join(workspacePath, 'src', 'app.ts'), 'export const version = 0;\n', 'utf-8');
+
+    const originalGenerateImplementationDraft = llmService.generateImplementationDraft;
+    const originalExpandImplementationContext = workspaceService.expandImplementationContext;
+    let implementationCalls = 0;
+
+    try {
+      llmService.generateImplementationDraft = async () => {
+        implementationCalls += 1;
+        return {
+          version: '1',
+          kind: 'implementation_draft',
+          status: 'needs_review',
+          data: {
+            summary: 'Insufficient context for a safe code patch.',
+            fileChanges: [],
+          },
+        };
+      };
+      workspaceService.expandImplementationContext = (input) => ({
+        ...input.workspace,
+        snippets: [
+          ...input.workspace.snippets,
+          { path: `src/generated-context-${input.round}.ts`, content: `export const round = ${input.round};\n` },
+        ],
+        candidateFiles: [
+          ...input.workspace.candidateFiles,
+          `src/generated-context-${input.round}.ts`,
+        ],
+      });
+
+      const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+      const result = await orchestrator.generateConcretePatch(
+        createRankedIssue(),
+        createWorkspace({
+          workspacePath,
+          snippets: [{ path: 'src/app.ts', content: 'export const version = 0;\n' }],
+          testCommands: [],
+          validationCommands: [],
+          validationWarnings: [],
+          testResults: [],
+        }),
+        createPatchDraft(),
+        false,
+      );
+
+      expect(implementationCalls).toBe(4);
+      expect(result.changedFiles).toEqual([]);
+      expect(result.reviewRequired).toBe(true);
+    } finally {
+      llmService.generateImplementationDraft = originalGenerateImplementationDraft;
+      workspaceService.expandImplementationContext = originalExpandImplementationContext;
+    }
+  });
+
   test('skips generated file edits in draft-only mode', async () => {
     const workspacePath = mkdtempSync(join(tmpdir(), 'openmeta-agent-draft-only-'));
     tempDirs.push(workspacePath);
