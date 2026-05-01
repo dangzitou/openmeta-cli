@@ -263,6 +263,10 @@ Example provider workflow:
 openmeta provider config
 openmeta provider save production
 openmeta provider use production --validate
+
+# optional: tune context budget and autonomous mode directly
+openmeta config set llm.maxContextTokens 262144
+openmeta config set automation.autonomousAgentEnabled true
 ```
 
 ## Local Paths
@@ -279,8 +283,9 @@ OpenMeta maintains a clear local footprint:
 During `openmeta agent`, OpenMeta now retries implementation drafting with bounded repository context expansion when the model reports insufficient code context.
 
 - Context expansion is enabled by default and only reads files inside the prepared workspace.
-- The loop is capped at three expansion rounds and never bypasses dirty-workspace, draft-only, validation, or generated-file safety gates.
-- Editable context is capped at approximately 200k tokens using deterministic compression; no extra summarization model call is required.
+- Standard runs stop at three expansion rounds; autonomous mode can extend the loop to five rounds with a wider snippet budget.
+- The loop never bypasses dirty-workspace, draft-only, validation, or generated-file safety gates.
+- Editable context is capped by the active provider profile's `maxContextTokens` setting using deterministic compression; no extra summarization model call is required.
 
 ## Security Model
 
