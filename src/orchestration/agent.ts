@@ -909,6 +909,9 @@ export class AgentOrchestrator {
     const patchPaths = this.collectPatchDraftPaths(patchDraft);
     const existingSnippetPaths = new Set(workspace.snippets.map((snippet) => snippet.path));
     const missingSnippetPaths = patchPaths.filter((path) => !existingSnippetPaths.has(path));
+    if (missingSnippetPaths.length > 0) {
+      ui.liveEvent('Reading implementation target files', missingSnippetPaths.map((path) => `reading ${path}`), 'info');
+    }
     const extraSnippets = workspaceService
       .readWorkspaceFiles(workspace.workspacePath, missingSnippetPaths)
       .filter((snippet) => snippet.content.trim().length > 0);
@@ -1049,6 +1052,12 @@ export class AgentOrchestrator {
           maxTotalSnippets,
         });
         const addedFiles = implementationWorkspace.snippets.length - previousSnippetCount;
+        const newlyLoadedPaths = implementationWorkspace.snippets
+          .slice(previousSnippetCount)
+          .map((snippet) => snippet.path);
+        if (newlyLoadedPaths.length > 0) {
+          ui.liveEvent(`Reading context files for round ${round}`, newlyLoadedPaths.map((path) => `reading ${path}`), 'info');
+        }
         const budgeted = contextBudgetService.applySnippetBudget(implementationWorkspace.snippets, {
           priorityPaths: [
             ...patchDraft.targetFiles.map((file) => file.path),
@@ -1117,6 +1126,7 @@ export class AgentOrchestrator {
         subtitle: change.reason,
         state: 'done',
       })));
+      ui.liveEvent('Editing generated files', implementation.data.fileChanges.map((change) => `editing ${change.path}`), 'info');
 
       const changedFiles = await ui.task({
         title: `Applying ${implementation.data.fileChanges.length} generated file edit(s)`,
@@ -1168,7 +1178,10 @@ export class AgentOrchestrator {
           doneMessage: 'Baseline validation complete',
           failedMessage: 'Baseline validation finished with issues',
           tone: 'info',
-        }, async () => workspaceService.runValidationCommands(implementationWorkspace.workspacePath, implementationWorkspace.validationCommands.slice(0, 3)))
+        }, async () => {
+          ui.liveEvent('Validating workspace', implementationWorkspace.validationCommands.slice(0, 3).map((command) => `validating ${command.command}`), 'info');
+          return workspaceService.runValidationCommands(implementationWorkspace.workspacePath, implementationWorkspace.validationCommands.slice(0, 3));
+        })
         : implementationWorkspace.testResults;
       ui.liveEvent('Validation review finished', [
         `Summary: ${this.formatValidationSummary(validationResults)}`,
@@ -1588,6 +1601,9 @@ export class AgentOrchestrator {
     });
 
     const currentFiles = workspaceService.readWorkspaceFiles(input.workspace.workspacePath, input.changedFiles);
+    if (currentFiles.length > 0) {
+      ui.liveEvent('Reading changed files for repair', currentFiles.map((snippet) => `reading ${snippet.path}`), 'info');
+    }
     const repairDraft = await ui.task({
       title: 'Generating validation repair patch',
       doneMessage: 'Validation repair patch generated',
@@ -1626,9 +1642,12 @@ export class AgentOrchestrator {
       doneMessage: 'Validation repair edits applied',
       failedMessage: 'Validation repair edits failed to apply',
       tone: 'info',
-    }, async () => workspaceService.applyGeneratedChanges(input.workspace.workspacePath, repairDraft.data.fileChanges, {
-      allowedPaths: input.changedFiles,
-    }));
+    }, async () => {
+      ui.liveEvent('Editing repair files', repairDraft.data.fileChanges.map((change) => `editing ${change.path}`), 'info');
+      return workspaceService.applyGeneratedChanges(input.workspace.workspacePath, repairDraft.data.fileChanges, {
+        allowedPaths: input.changedFiles,
+      });
+    });
 
     if (repairedFiles.reviewRequired) {
       this.showStructuredReviewNotice({
@@ -1656,10 +1675,13 @@ export class AgentOrchestrator {
       doneMessage: 'Repair validation complete',
       failedMessage: 'Repair validation finished with issues',
       tone: 'info',
-    }, async () => workspaceService.runValidationCommands(
-      input.workspace.workspacePath,
-      input.workspace.validationCommands.slice(0, 3),
-    ));
+    }, async () => {
+      ui.liveEvent('Re-validating after repair', input.workspace.validationCommands.slice(0, 3).map((command) => `validating ${command.command}`), 'info');
+      return workspaceService.runValidationCommands(
+        input.workspace.workspacePath,
+        input.workspace.validationCommands.slice(0, 3),
+      );
+    });
 
     return {
       changedFiles: [...new Set([...input.changedFiles, ...repairedFiles.appliedFiles])],
