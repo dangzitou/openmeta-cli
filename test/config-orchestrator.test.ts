@@ -46,4 +46,15 @@ describe('ConfigOrchestrator', () => {
     expect(loaded.github.pat).toBe('ghp_new_secret');
     expect(loaded.llm.apiKey).toBe('sk-new-secret');
   });
+
+  test('sets max context tokens and autonomous agent flags from dotted config keys', async () => {
+    const orchestrator = new ConfigOrchestrator();
+
+    await orchestrator.set('llm.maxContextTokens', '262144');
+    await orchestrator.set('automation.autonomousAgentEnabled', 'true');
+
+    const loaded = await new ConfigService().load();
+    expect(loaded.llm.maxContextTokens).toBe(262144);
+    expect(loaded.automation.autonomousAgentEnabled).toBe(true);
+  });
 });

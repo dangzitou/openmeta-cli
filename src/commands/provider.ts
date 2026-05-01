@@ -31,12 +31,14 @@ export function registerProviderCommand(program: Command): void {
     .requiredOption('--base-url <url>', 'OpenAI-compatible API base URL')
     .requiredOption('--model <model>', 'Model name')
     .requiredOption('--api-key <key>', 'LLM API key')
+    .requiredOption('--max-context-tokens <number>', 'Maximum context token budget for this provider profile')
     .option('--header <key=value>', 'Extra API header; repeat for multiple headers', (value, previous: string[] = []) => [...previous, value], [])
     .action((name: string, options: {
       provider?: string;
       baseUrl: string;
       model: string;
       apiKey: string;
+      maxContextTokens: string;
       header: string[];
     }) => runCommand('OpenMeta Provider', () => providerOrchestrator.add(name, options)));
 

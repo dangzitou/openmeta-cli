@@ -23,6 +23,7 @@ export interface LLMProviderProfile {
   apiKey: string;
   modelName: string;
   apiHeaders: Record<string, string>;
+  maxContextTokens: number;
 }
 
 export interface LLMConfig {
@@ -31,6 +32,7 @@ export interface LLMConfig {
   apiKey: string;
   modelName: string;
   apiHeaders?: Record<string, string>;
+  maxContextTokens?: number;
   activeProfile?: string;
   profiles?: Record<string, LLMProviderProfile>;
 }
@@ -43,6 +45,7 @@ export interface AutomationConfig {
   scheduler: SchedulerProvider;
   minMatchScore: number;
   skipIfAlreadyGeneratedToday: boolean;
+  autonomousAgentEnabled?: boolean;
 }
 
 export interface AppConfig {

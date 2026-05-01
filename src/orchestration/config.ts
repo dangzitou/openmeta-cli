@@ -62,6 +62,7 @@ export class ConfigOrchestrator {
       { label: 'Provider', value: config.llm.provider || '(not set)', tone: config.llm.provider ? 'info' : 'warning' },
       { label: 'Base URL', value: config.llm.apiBaseUrl || '(not set)', tone: config.llm.apiBaseUrl ? 'info' : 'warning' },
       { label: 'Model', value: config.llm.modelName || '(not set)', tone: config.llm.modelName ? 'info' : 'warning' },
+      { label: 'Max context tokens', value: String(config.llm.maxContextTokens || 200000), tone: 'info' },
       { label: 'Extra headers', value: Object.keys(config.llm.apiHeaders || {}).length > 0 ? JSON.stringify(config.llm.apiHeaders) : '(none)', tone: 'info' },
       { label: 'API key', value: ui.maskSecret(config.llm.apiKey), tone: config.llm.apiKey ? 'info' : 'warning' },
       { label: 'Saved profiles', value: String(Object.keys(config.llm.profiles || {}).length), tone: Object.keys(config.llm.profiles || {}).length > 0 ? 'info' : 'muted' },
@@ -74,6 +75,7 @@ export class ConfigOrchestrator {
       { label: 'Content type', value: config.automation.contentType, tone: 'info' },
       { label: 'Min match score', value: String(config.automation.minMatchScore), tone: 'info' },
       { label: 'Skip if already generated today', value: config.automation.skipIfAlreadyGeneratedToday ? 'yes' : 'no', tone: 'info' },
+      { label: 'Autonomous agent', value: config.automation.autonomousAgentEnabled ? 'yes' : 'no', tone: config.automation.autonomousAgentEnabled ? 'warning' : 'muted' },
     ]);
 
     ui.card({
@@ -97,9 +99,9 @@ export class ConfigOrchestrator {
   async set(key: string, value: string): Promise<void> {
     const config = await configService.get();
     const validPaths = ['userProfile.techStack', 'userProfile.proficiency', 'userProfile.focusAreas',
-                       'github.username', 'github.pat', 'github.targetRepoPath', 'llm.provider', 'llm.apiBaseUrl', 'llm.apiKey', 'llm.modelName',
+                       'github.username', 'github.pat', 'github.targetRepoPath', 'llm.provider', 'llm.apiBaseUrl', 'llm.apiKey', 'llm.modelName', 'llm.maxContextTokens',
                        'automation.enabled', 'automation.scheduleTime', 'automation.contentType',
-                       'automation.minMatchScore', 'automation.skipIfAlreadyGeneratedToday',
+                       'automation.minMatchScore', 'automation.skipIfAlreadyGeneratedToday', 'automation.autonomousAgentEnabled',
                        'commitTemplate'];
 
     if (!validPaths.includes(key)) {
@@ -144,6 +146,13 @@ export class ConfigOrchestrator {
       updated = await configService.update({ llm: { ...config.llm, apiKey: this.parseRequiredSecret(value, key) } });
     } else if (key === 'llm.modelName') {
       updated = await configService.update({ llm: { ...config.llm, modelName: value } });
+    } else if (key === 'llm.maxContextTokens') {
+      updated = await configService.update({
+        llm: {
+          ...config.llm,
+          maxContextTokens: this.parsePositiveInteger(value, key, 16000),
+        },
+      });
     } else if (key === 'automation.enabled') {
       updated = await configService.update({
         automation: {
@@ -187,6 +196,13 @@ export class ConfigOrchestrator {
         automation: {
           ...config.automation,
           skipIfAlreadyGeneratedToday: this.parseBoolean(value, key),
+        },
+      });
+    } else if (key === 'automation.autonomousAgentEnabled') {
+      updated = await configService.update({
+        automation: {
+          ...config.automation,
+          autonomousAgentEnabled: this.parseBoolean(value, key),
         },
       });
     } else if (key === 'commitTemplate') {
@@ -280,6 +296,15 @@ export class ConfigOrchestrator {
     return trimmed;
   }
 
+  private parsePositiveInteger(value: string, key: string, min: number): number {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isNaN(parsed) || parsed < min) {
+      throw new Error(`${key} must be an integer greater than or equal to ${min}.`);
+    }
+
+    return parsed;
+  }
+
   private describeUpdatedValue(key: string, config: AppConfig): string {
     switch (key) {
       case 'userProfile.techStack':
@@ -302,6 +327,8 @@ export class ConfigOrchestrator {
         return ui.maskSecret(config.llm.apiKey);
       case 'llm.modelName':
         return config.llm.modelName;
+      case 'llm.maxContextTokens':
+        return String(config.llm.maxContextTokens || 200000);
       case 'automation.enabled':
         return config.automation.enabled ? 'yes' : 'no';
       case 'automation.scheduleTime':
@@ -312,6 +339,8 @@ export class ConfigOrchestrator {
         return String(config.automation.minMatchScore);
       case 'automation.skipIfAlreadyGeneratedToday':
         return config.automation.skipIfAlreadyGeneratedToday ? 'yes' : 'no';
+      case 'automation.autonomousAgentEnabled':
+        return config.automation.autonomousAgentEnabled ? 'yes' : 'no';
       case 'commitTemplate':
         return config.commitTemplate;
       default:

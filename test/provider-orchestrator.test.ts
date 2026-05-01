@@ -42,6 +42,7 @@ describe('ProviderOrchestrator', () => {
         apiBaseUrl: 'https://example.com/v1',
         modelName: 'example-model',
         apiKey: 'sk-profile-secret',
+        maxContextTokens: 200000,
       },
     });
 
@@ -56,6 +57,7 @@ describe('ProviderOrchestrator', () => {
       apiBaseUrl: 'https://example.com/v1',
       modelName: 'example-model',
       apiKey: 'sk-profile-secret',
+      maxContextTokens: 200000,
       apiHeaders: {},
     });
     expect(loaded.llm.activeProfile).toBe('example');
@@ -69,6 +71,7 @@ describe('ProviderOrchestrator', () => {
       baseUrl: 'https://api2.henng.cn/v1',
       model: 'gpt-5.4',
       apiKey: 'sk-henng-secret',
+      maxContextTokens: '262144',
       header: ['X-Test=yes'],
     });
     await orchestrator.use('henng-gpt54');
@@ -78,6 +81,7 @@ describe('ProviderOrchestrator', () => {
     expect(loaded.llm.apiBaseUrl).toBe('https://api2.henng.cn/v1');
     expect(loaded.llm.modelName).toBe('gpt-5.4');
     expect(loaded.llm.apiKey).toBe('sk-henng-secret');
+    expect(loaded.llm.maxContextTokens).toBe(262144);
     expect(loaded.llm.apiHeaders).toEqual({ 'X-Test': 'yes' });
     expect(loaded.llm.activeProfile).toBe('henng-gpt54');
   });
@@ -99,6 +103,7 @@ describe('ProviderOrchestrator', () => {
             apiBaseUrl: 'https://legacy.example.com/v1',
             modelName: 'legacy-model',
             apiKey: 'sk-legacy',
+            maxContextTokens: 131072,
           } as never,
         },
       },
@@ -109,6 +114,7 @@ describe('ProviderOrchestrator', () => {
 
     const loaded = await configService.get();
     expect(loaded.llm.apiHeaders).toEqual({ 'X-Keep': 'yes' });
+    expect(loaded.llm.maxContextTokens).toBe(131072);
   });
 
   test('rejects invalid providers when saving the current config as a profile', async () => {
@@ -133,6 +139,7 @@ describe('ProviderOrchestrator', () => {
       baseUrl: 'https://example.com/v1',
       model: 'example-model',
       apiKey: 'sk-secret',
+      maxContextTokens: '200000',
       header: [''],
     })).resolves.toBeUndefined();
 
@@ -141,6 +148,7 @@ describe('ProviderOrchestrator', () => {
       baseUrl: 'https://example.com/v1',
       model: 'example-model',
       apiKey: 'sk-secret',
+      maxContextTokens: '200000',
       header: ['not-a-header'],
     })).rejects.toThrow('must use key=value format');
   });
@@ -153,6 +161,7 @@ describe('ProviderOrchestrator', () => {
       baseUrl: 'https://example.com/v1',
       model: 'temporary-model',
       apiKey: 'sk-temporary-secret',
+      maxContextTokens: '200000',
     });
     await orchestrator.use('temporary');
     await orchestrator.remove('temporary');
@@ -161,5 +170,18 @@ describe('ProviderOrchestrator', () => {
     expect(loaded.llm.profiles?.['temporary']).toBeUndefined();
     expect(loaded.llm.activeProfile).toBe('');
     expect(loaded.llm.modelName).toBe('temporary-model');
+  });
+
+  test('rejects invalid max context token values when adding a provider profile', async () => {
+    const orchestrator = new ProviderOrchestrator();
+
+    await expect(orchestrator.add('tiny-context', {
+      provider: 'custom',
+      baseUrl: 'https://example.com/v1',
+      model: 'example-model',
+      apiKey: 'sk-secret',
+      maxContextTokens: '1000',
+      header: [],
+    })).rejects.toThrow('maxContextTokens must be an integer greater than or equal to 16000');
   });
 });

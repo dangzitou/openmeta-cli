@@ -43,6 +43,7 @@ function createDefaultConfig(): AppConfig {
       apiKey: '',
       modelName: 'gpt-4o-mini',
       apiHeaders: {},
+      maxContextTokens: 200000,
       activeProfile: '',
       profiles: {},
     },
@@ -54,6 +55,7 @@ function createDefaultConfig(): AppConfig {
       scheduler: getDefaultSchedulerProvider(),
       minMatchScore: 70,
       skipIfAlreadyGeneratedToday: true,
+      autonomousAgentEnabled: false,
     },
     commitTemplate: 'feat(daily): {{title}}\n\n{{content}}',
   };
@@ -184,7 +186,14 @@ export class ConfigService {
         },
         profiles: {
           ...defaults.llm.profiles,
-          ...config.llm?.profiles,
+          ...Object.fromEntries(Object.entries(config.llm?.profiles ?? {}).map(([name, profile]) => [
+            name,
+            {
+              ...profile,
+              apiHeaders: profile.apiHeaders ?? {},
+              maxContextTokens: profile.maxContextTokens ?? defaults.llm.maxContextTokens,
+            },
+          ])),
         },
       },
       automation: {

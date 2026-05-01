@@ -8,6 +8,7 @@ interface ProviderAddOptions {
   baseUrl?: string;
   model?: string;
   apiKey?: string;
+  maxContextTokens?: string;
   header?: string[];
   validate?: boolean;
 }
@@ -64,6 +65,16 @@ function requireValue(value: string | undefined, label: string): string {
   return trimmed;
 }
 
+function parseMaxContextTokens(value: string | number | undefined): number {
+  const raw = typeof value === 'number' ? String(value) : value;
+  const parsed = Number.parseInt(raw?.trim() || '', 10);
+  if (Number.isNaN(parsed) || parsed < 16000) {
+    throw new Error('maxContextTokens must be an integer greater than or equal to 16000.');
+  }
+
+  return parsed;
+}
+
 export class ProviderOrchestrator {
   async list(): Promise<void> {
     const config = await configService.get();
@@ -100,6 +111,7 @@ export class ProviderOrchestrator {
         ],
         lines: [
           `API key: ${ui.maskSecret(profile.apiKey)}`,
+          `Max context tokens: ${profile.maxContextTokens}`,
           `Extra headers: ${Object.keys(profile.apiHeaders || {}).length > 0 ? JSON.stringify(profile.apiHeaders) : '(none)'}`,
         ],
         tone: config.llm.activeProfile === name ? 'success' : 'info',
@@ -136,6 +148,7 @@ export class ProviderOrchestrator {
       apiBaseUrl: requireValue(options.baseUrl, 'base URL'),
       modelName: requireValue(options.model, 'model'),
       apiKey: requireValue(options.apiKey, 'API key'),
+      maxContextTokens: parseMaxContextTokens(options.maxContextTokens),
       apiHeaders: parseHeaders(options.header?.filter(Boolean) ?? []),
     };
     const updated = await this.saveProfile(config, name, profile, config.llm.activeProfile);
@@ -149,6 +162,7 @@ export class ProviderOrchestrator {
         `Provider: ${profile.provider}`,
         `Model: ${profile.modelName}`,
         `Endpoint: ${profile.apiBaseUrl}`,
+        `Max context tokens: ${profile.maxContextTokens}`,
         `Active profile: ${updated.llm.activeProfile || '(none)'}`,
       ],
       tone: 'success',
@@ -248,6 +262,24 @@ export class ProviderOrchestrator {
       },
     ]);
 
+    const { maxContextTokens } = await prompt<{ maxContextTokens: string }>([
+      {
+        type: 'input',
+        name: 'maxContextTokens',
+        message: 'Maximum context tokens for this provider profile:',
+        default: String(config.llm.maxContextTokens || 200000),
+        filter: (input: string) => input.trim(),
+        validate: (input: string) => {
+          try {
+            parseMaxContextTokens(input);
+            return true;
+          } catch (error) {
+            return error instanceof Error ? error.message : 'Invalid max context token value.';
+          }
+        },
+      },
+    ]);
+
     const { extraHeaders } = await prompt<{ extraHeaders: string }>([
       {
         type: 'input',
@@ -292,6 +324,7 @@ export class ProviderOrchestrator {
       apiBaseUrl,
       modelName,
       apiKey: apiKey.trim(),
+      maxContextTokens: parseMaxContextTokens(maxContextTokens),
       apiHeaders: {
         ...(preset.apiHeaders || {}),
         ...parseHeaderInput(extraHeaders),
@@ -314,6 +347,7 @@ export class ProviderOrchestrator {
         `Provider: ${profile.provider}`,
         `Model: ${profile.modelName}`,
         `Endpoint: ${profile.apiBaseUrl}`,
+        `Max context tokens: ${profile.maxContextTokens}`,
       ],
       tone: 'success',
     });
@@ -332,6 +366,7 @@ export class ProviderOrchestrator {
         ...config.llm,
         ...profile,
         apiHeaders: profile.apiHeaders ?? config.llm.apiHeaders ?? {},
+        maxContextTokens: profile.maxContextTokens ?? config.llm.maxContextTokens ?? 200000,
         activeProfile: name,
         profiles: config.llm.profiles ?? {},
       },
@@ -356,6 +391,7 @@ export class ProviderOrchestrator {
         `Provider: ${updated.llm.provider}`,
         `Model: ${updated.llm.modelName}`,
         `Endpoint: ${updated.llm.apiBaseUrl}`,
+        `Max context tokens: ${updated.llm.maxContextTokens || 200000}`,
         validationDetail,
       ],
       tone,
@@ -432,6 +468,7 @@ export class ProviderOrchestrator {
       apiBaseUrl: config.llm.apiBaseUrl,
       apiKey: config.llm.apiKey,
       modelName: config.llm.modelName,
+      maxContextTokens: parseMaxContextTokens(config.llm.maxContextTokens),
       apiHeaders: config.llm.apiHeaders ?? {},
     };
   }
@@ -451,6 +488,7 @@ export class ProviderOrchestrator {
           [name]: {
             ...profile,
             apiHeaders: profile.apiHeaders ?? {},
+            maxContextTokens: profile.maxContextTokens ?? config.llm.maxContextTokens ?? 200000,
           },
         },
       },

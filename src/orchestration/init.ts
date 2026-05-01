@@ -186,6 +186,7 @@ export class InitOrchestrator {
     let apiBaseUrl = config.llm.apiBaseUrl;
     let apiHeaders: Record<string, string> = config.llm.apiHeaders ?? {};
     let apiKey = config.llm.apiKey;
+    let maxContextTokens = config.llm.maxContextTokens || 200000;
 
     await stepOrSkip(
       'llm',
@@ -197,6 +198,7 @@ export class InitOrchestrator {
           { label: 'Provider', value: selectedProvider?.name ?? providerValue, tone: 'success' },
           { label: 'Model', value: modelValue, tone: 'success' },
           { label: 'Endpoint', value: apiBaseUrl, tone: 'info' },
+          { label: 'Max context tokens', value: String(maxContextTokens), tone: 'info' },
           { label: 'Extra headers', value: Object.keys(apiHeaders).length > 0 ? JSON.stringify(apiHeaders) : '(none)', tone: 'info' },
           { label: 'API key', value: ui.maskSecret(apiKey), tone: 'success' },
         ]);
@@ -232,6 +234,7 @@ export class InitOrchestrator {
             });
 
           apiKey = await this.promptAPIKey();
+          maxContextTokens = await this.promptMaxContextTokens(config.llm.maxContextTokens || 200000);
 
           llmService.initialize(apiKey, apiBaseUrl, modelValue, apiHeaders, selectedProvider.value as AppConfig['llm']['provider']);
           llmValid = await this.validateLlmConnection();
@@ -260,11 +263,12 @@ export class InitOrchestrator {
           }
         }
         completedSteps.add('llm');
-        await commit({ llm: { provider: providerValue as AppConfig['llm']['provider'], apiBaseUrl, apiKey, modelName: modelValue, apiHeaders } });
+        await commit({ llm: { provider: providerValue as AppConfig['llm']['provider'], apiBaseUrl, apiKey, modelName: modelValue, apiHeaders, maxContextTokens } });
         ui.keyValues('LLM provider connected', [
           { label: 'Provider', value: selectedProvider!.name, tone: 'success' },
           { label: 'Model', value: modelValue, tone: 'success' },
           { label: 'Endpoint', value: apiBaseUrl, tone: 'info' },
+          { label: 'Max context tokens', value: String(maxContextTokens), tone: 'info' },
           { label: 'Extra headers', value: Object.keys(apiHeaders).length > 0 ? JSON.stringify(apiHeaders) : '(none)', tone: 'info' },
           { label: 'API key', value: ui.maskSecret(apiKey), tone: 'success' },
         ]);
@@ -498,6 +502,26 @@ export class InitOrchestrator {
     ]);
 
     return modelName.trim();
+  }
+
+  private async promptMaxContextTokens(defaultValue: number): Promise<number> {
+    const { maxContextTokens } = await prompt<{ maxContextTokens: string }>([
+      {
+        type: 'input',
+        name: 'maxContextTokens',
+        message: 'Enter your model max context tokens:',
+        default: String(defaultValue || 200000),
+        filter: (input: string) => input.trim(),
+        validate: (input: string) => {
+          const parsed = Number.parseInt(input.trim(), 10);
+          return !Number.isNaN(parsed) && parsed >= 16000
+            ? true
+            : 'Max context tokens must be an integer greater than or equal to 16000.';
+        },
+      },
+    ]);
+
+    return Number.parseInt(maxContextTokens.trim(), 10);
   }
 
   private async promptUsername(): Promise<string> {

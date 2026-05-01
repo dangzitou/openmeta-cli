@@ -92,8 +92,10 @@ describe('stateful services', () => {
 
     expect(loaded.github.username).toBe('partial-user');
     expect(loaded.llm.modelName).toBe('gpt-4o-mini');
+    expect(loaded.llm.maxContextTokens).toBe(200000);
     expect(loaded.automation.enabled).toBe(false);
     expect(loaded.automation.scheduleTime).toBe('09:00');
+    expect(loaded.automation.autonomousAgentEnabled).toBe(false);
   });
 
   test('memory service persists repo memory snapshots', () => {
