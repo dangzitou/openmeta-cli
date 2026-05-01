@@ -502,6 +502,7 @@ export class ProviderOrchestrator {
       profile.modelName,
       profile.apiHeaders,
       profile.provider,
+      profile.maxContextTokens,
     );
 
     return llmService.validateConnection();

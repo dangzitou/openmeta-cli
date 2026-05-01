@@ -15,6 +15,7 @@ interface LLMServiceInternals {
     };
   } | null;
   provider: 'openai' | 'minimax' | 'moonshot' | 'zhipu' | 'custom';
+  maxContextTokens: number;
   parseImplementationDraft(content: string): {
     status: StructuredOutputStatus;
     data: ImplementationDraft;
@@ -44,6 +45,10 @@ interface LLMServiceInternals {
     data: MatchedIssue[];
   };
   formatRepoMemory(memory: ReturnType<typeof createMemory>): string;
+  prepareSnippetsForPrompt(snippets: Array<{ path: string; content: string }>, options?: {
+    priorityPaths?: string[];
+    keywords?: string[];
+  }): Array<{ path: string; content: string; compressed?: boolean }>;
 }
 
 describe('LLMService implementation draft parsing', () => {
@@ -234,6 +239,36 @@ describe('LLMService validation behavior', () => {
 
     const valid = await service.validateConnection();
     expect(valid).toBe(true);
+  });
+});
+
+describe('LLMService context budgeting', () => {
+  test('respects configured maxContextTokens when preparing snippets', () => {
+    const service = new LLMService() as unknown as LLMServiceInternals;
+    service.maxContextTokens = 16000;
+
+    const large = Array.from({ length: 4000 }, (_, index) => `const filler${index} = ${index};`).join('\n');
+    const snippets = service.prepareSnippetsForPrompt([
+      {
+        path: 'src/priority.ts',
+        content: [
+          'export function buildFilter() {',
+          '  return "fulfillment_status";',
+          '}',
+          large,
+        ].join('\n'),
+      },
+      {
+        path: 'src/secondary.ts',
+        content: large.repeat(4),
+      },
+    ], {
+      priorityPaths: ['src/priority.ts'],
+      keywords: ['fulfillment_status'],
+    });
+
+    expect(snippets[0]?.path).toBe('src/priority.ts');
+    expect(snippets.some((snippet) => snippet.compressed)).toBe(true);
   });
 });
 

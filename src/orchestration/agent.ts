@@ -761,7 +761,14 @@ export class AgentOrchestrator {
       return;
     }
 
-    llmService.initialize(config.llm.apiKey, config.llm.apiBaseUrl, config.llm.modelName, config.llm.apiHeaders, config.llm.provider);
+    llmService.initialize(
+      config.llm.apiKey,
+      config.llm.apiBaseUrl,
+      config.llm.modelName,
+      config.llm.apiHeaders,
+      config.llm.provider,
+      config.llm.maxContextTokens,
+    );
     const llmValid = await ui.task({
       title: 'Validating LLM provider',
       doneMessage: 'LLM provider verified',

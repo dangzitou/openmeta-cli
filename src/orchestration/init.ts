@@ -193,7 +193,7 @@ export class InitOrchestrator {
       !!(apiKey && apiBaseUrl && modelValue),
       'LLM provider is already configured.',
       () => {
-        llmService.initialize(apiKey, apiBaseUrl, modelValue, apiHeaders, providerValue);
+          llmService.initialize(apiKey, apiBaseUrl, modelValue, apiHeaders, providerValue, maxContextTokens);
         ui.keyValues('LLM provider connected', [
           { label: 'Provider', value: selectedProvider?.name ?? providerValue, tone: 'success' },
           { label: 'Model', value: modelValue, tone: 'success' },
@@ -236,7 +236,14 @@ export class InitOrchestrator {
           apiKey = await this.promptAPIKey();
           maxContextTokens = await this.promptMaxContextTokens(config.llm.maxContextTokens || 200000);
 
-          llmService.initialize(apiKey, apiBaseUrl, modelValue, apiHeaders, selectedProvider.value as AppConfig['llm']['provider']);
+          llmService.initialize(
+            apiKey,
+            apiBaseUrl,
+            modelValue,
+            apiHeaders,
+            selectedProvider.value as AppConfig['llm']['provider'],
+            maxContextTokens,
+          );
           llmValid = await this.validateLlmConnection();
 
           if (!llmValid) {

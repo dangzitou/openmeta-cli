@@ -47,6 +47,7 @@ export class LLMService {
   private client: OpenAI | null = null;
   private modelName: string = 'gpt-4o-mini';
   private provider: LLMProvider = 'openai';
+  private maxContextTokens: number = 200000;
   private lastValidationError: string | null = null;
 
   initialize(
@@ -55,6 +56,7 @@ export class LLMService {
     modelName?: string,
     apiHeaders?: Record<string, string>,
     provider?: LLMProvider,
+    maxContextTokens?: number,
   ): void {
     this.client = new OpenAI({
       apiKey,
@@ -66,6 +68,9 @@ export class LLMService {
     }
     if (provider) {
       this.provider = provider;
+    }
+    if (typeof maxContextTokens === 'number' && maxContextTokens >= 16000) {
+      this.maxContextTokens = maxContextTokens;
     }
   }
 
@@ -436,7 +441,10 @@ Repo Stars: ${i.repoStars}`
     priorityPaths?: string[];
     keywords?: string[];
   } = {}): RepoFileSnippet[] {
-    const budgeted = contextBudgetService.applySnippetBudget(snippets, options);
+    const budgeted = contextBudgetService.applySnippetBudget(snippets, {
+      ...options,
+      maxTokens: this.maxContextTokens,
+    });
     if (budgeted.compressed) {
       logger.info(`Compressed implementation context to approximately ${budgeted.estimatedTokens} tokens.`);
     }
