@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { AgentOrchestrator } from '../src/orchestration/agent.js';
 import { llmService, workspaceService } from '../src/services/index.js';
+import type { AppConfig } from '../src/types/index.js';
 import {
   createPatchDraft,
   createRankedIssue,
@@ -33,6 +34,7 @@ interface AgentInternals {
     patchDraft: ReturnType<typeof createPatchDraft>,
     runChecks: boolean,
     draftOnly?: boolean,
+    autonomousAgentEnabled?: boolean,
   ): Promise<{
     changedFiles: string[];
     validationResults: Array<{
@@ -43,6 +45,7 @@ interface AgentInternals {
     }>;
     reviewRequired: boolean;
   }>;
+  isAutonomousAgentEnabled(config: AppConfig, headless: boolean): boolean;
 }
 
 const tempDirs: string[] = [];
@@ -407,6 +410,84 @@ describe('AgentOrchestrator patch workflow', () => {
       llmService.generateImplementationDraft = originalGenerateImplementationDraft;
       workspaceService.expandImplementationContext = originalExpandImplementationContext;
     }
+  });
+
+  test('extends the retry ceiling when autonomous mode is enabled', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'openmeta-agent-autonomous-context-limit-'));
+    tempDirs.push(workspacePath);
+    mkdirSync(join(workspacePath, 'src'), { recursive: true });
+    writeFileSync(join(workspacePath, 'src', 'app.ts'), 'export const version = 0;\n', 'utf-8');
+
+    const originalGenerateImplementationDraft = llmService.generateImplementationDraft;
+    const originalExpandImplementationContext = workspaceService.expandImplementationContext;
+    let implementationCalls = 0;
+
+    try {
+      llmService.generateImplementationDraft = async () => {
+        implementationCalls += 1;
+        return {
+          version: '1',
+          kind: 'implementation_draft',
+          status: 'needs_review',
+          data: {
+            summary: 'Insufficient context for a safe code patch.',
+            fileChanges: [],
+          },
+        };
+      };
+      workspaceService.expandImplementationContext = (input) => ({
+        ...input.workspace,
+        snippets: [
+          ...input.workspace.snippets,
+          { path: `src/generated-context-${input.round}.ts`, content: `export const round = ${input.round};\n` },
+        ],
+        candidateFiles: [
+          ...input.workspace.candidateFiles,
+          `src/generated-context-${input.round}.ts`,
+        ],
+      });
+
+      const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+      const result = await orchestrator.generateConcretePatch(
+        createRankedIssue(),
+        createWorkspace({
+          workspacePath,
+          snippets: [{ path: 'src/app.ts', content: 'export const version = 0;\n' }],
+          testCommands: [],
+          validationCommands: [],
+          validationWarnings: [],
+          testResults: [],
+        }),
+        createPatchDraft(),
+        false,
+        false,
+        true,
+      );
+
+      expect(implementationCalls).toBe(6);
+      expect(result.changedFiles).toEqual([]);
+      expect(result.reviewRequired).toBe(true);
+    } finally {
+      llmService.generateImplementationDraft = originalGenerateImplementationDraft;
+      workspaceService.expandImplementationContext = originalExpandImplementationContext;
+    }
+  });
+
+  test('treats automation config as autonomous mode even without headless', () => {
+    const orchestrator = new AgentOrchestrator() as unknown as AgentInternals;
+    const config = {
+      automation: {
+        autonomousAgentEnabled: true,
+      },
+    } as AppConfig;
+
+    expect(orchestrator.isAutonomousAgentEnabled(config, false)).toBe(true);
+    expect(orchestrator.isAutonomousAgentEnabled(config, true)).toBe(true);
+    expect(orchestrator.isAutonomousAgentEnabled({
+      automation: {
+        autonomousAgentEnabled: false,
+      },
+    } as AppConfig, false)).toBe(false);
   });
 
   test('skips generated file edits in draft-only mode', async () => {

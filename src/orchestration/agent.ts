@@ -77,6 +77,11 @@ interface ConcretePatchResult {
 type AgentStageId = 'scout' | 'select' | 'prepare' | 'draft' | 'validate' | 'pr' | 'publish';
 const ARTIFACT_PUBLISH_BRANCH = 'openmeta-artifacts';
 const MAX_CONTEXT_EXPANSION_ROUNDS = 3;
+const MAX_AUTONOMOUS_CONTEXT_EXPANSION_ROUNDS = 5;
+const DEFAULT_CONTEXT_EXPANSION_LIMIT = 8;
+const AUTONOMOUS_CONTEXT_EXPANSION_LIMIT = 12;
+const DEFAULT_CONTEXT_SNIPPET_LIMIT = 24;
+const AUTONOMOUS_CONTEXT_SNIPPET_LIMIT = 40;
 
 const AGENT_STAGES: Array<{ id: AgentStageId; label: string; description: string }> = [
   {
@@ -220,7 +225,14 @@ export class AgentOrchestrator {
     }
     const implementationWorkspace = this.buildImplementationWorkspace(workspace, patchDraft);
     const implementation = patchDraftResult.status === 'success'
-      ? await this.generateConcretePatch(selectedIssue, implementationWorkspace, patchDraft, runChecks, draftOnly)
+      ? await this.generateConcretePatch(
+        selectedIssue,
+        implementationWorkspace,
+        patchDraft,
+        runChecks,
+        draftOnly,
+        this.isAutonomousAgentEnabled(config, headless),
+      )
       : {
         changedFiles: [],
         validationResults: implementationWorkspace.testResults,
@@ -948,6 +960,7 @@ export class AgentOrchestrator {
     patchDraft: PatchDraft,
     runChecks: boolean,
     draftOnly: boolean = false,
+    autonomousAgentEnabled: boolean = false,
   ): Promise<ConcretePatchResult> {
     if (draftOnly) {
       ui.callout({
@@ -991,7 +1004,17 @@ export class AgentOrchestrator {
         tone: 'info',
       }, async () => llmService.generateImplementationDraft(issue, implementationWorkspace, patchDraft));
 
-      for (let round = 1; implementation.status !== 'success' && round <= MAX_CONTEXT_EXPANSION_ROUNDS; round += 1) {
+      const maxExpansionRounds = autonomousAgentEnabled
+        ? MAX_AUTONOMOUS_CONTEXT_EXPANSION_ROUNDS
+        : MAX_CONTEXT_EXPANSION_ROUNDS;
+      const maxNewFiles = autonomousAgentEnabled
+        ? AUTONOMOUS_CONTEXT_EXPANSION_LIMIT
+        : DEFAULT_CONTEXT_EXPANSION_LIMIT;
+      const maxTotalSnippets = autonomousAgentEnabled
+        ? AUTONOMOUS_CONTEXT_SNIPPET_LIMIT
+        : DEFAULT_CONTEXT_SNIPPET_LIMIT;
+
+      for (let round = 1; implementation.status !== 'success' && round <= maxExpansionRounds; round += 1) {
         if (!this.isInsufficientContextReview(implementation.data.summary)) {
           break;
         }
@@ -1002,6 +1025,8 @@ export class AgentOrchestrator {
           patchDraft,
           workspace: implementationWorkspace,
           round,
+          maxNewFiles,
+          maxTotalSnippets,
         });
         const addedFiles = implementationWorkspace.snippets.length - previousSnippetCount;
         const budgeted = contextBudgetService.applySnippetBudget(implementationWorkspace.snippets, {
@@ -1011,11 +1036,12 @@ export class AgentOrchestrator {
           ],
         });
         ui.keyValues('Context expansion', [
-          { label: 'Round', value: `${round}/${MAX_CONTEXT_EXPANSION_ROUNDS}`, tone: 'info' },
+          { label: 'Round', value: `${round}/${maxExpansionRounds}`, tone: 'info' },
           { label: 'Added files', value: String(Math.max(0, addedFiles)), tone: addedFiles > 0 ? 'success' : 'muted' },
           { label: 'Editable files', value: String(implementationWorkspace.snippets.length), tone: 'info' },
           { label: 'Estimated tokens', value: String(budgeted.estimatedTokens), tone: budgeted.compressed ? 'warning' : 'info' },
           { label: 'Compressed', value: budgeted.compressed ? 'yes' : 'no', tone: budgeted.compressed ? 'warning' : 'muted' },
+          { label: 'Autonomous', value: autonomousAgentEnabled ? 'yes' : 'no', tone: autonomousAgentEnabled ? 'warning' : 'muted' },
         ]);
 
         if (addedFiles <= 0) {
@@ -1023,7 +1049,7 @@ export class AgentOrchestrator {
         }
 
         implementation = await ui.task({
-          title: `Retrying concrete patch with expanded context (${round}/${MAX_CONTEXT_EXPANSION_ROUNDS})`,
+          title: `Retrying concrete patch with expanded context (${round}/${maxExpansionRounds})`,
           doneMessage: 'Concrete patch retry generated',
           failedMessage: 'Concrete patch retry failed',
           tone: 'info',
@@ -1193,7 +1219,8 @@ export class AgentOrchestrator {
       return { published: false };
     }
 
-    const shouldCommit = input.headless ? true : await this.promptForCommitConfirmation();
+    const autoProceed = this.isAutonomousAgentEnabled(input.config, input.headless);
+    const shouldCommit = autoProceed ? true : await this.promptForCommitConfirmation();
     if (!shouldCommit) {
       return { published: false };
     }
@@ -1205,7 +1232,7 @@ export class AgentOrchestrator {
     }
 
     const commitMessage = `feat(agent): draft contribution for ${input.issue.repoFullName}#${input.issue.number}`;
-    const finalConfirm = input.headless ? true : await this.promptForFinalCommitConfirmation(commitMessage);
+    const finalConfirm = autoProceed ? true : await this.promptForFinalCommitConfirmation(commitMessage);
     if (!finalConfirm) {
       return { published: false };
     }
@@ -1254,6 +1281,7 @@ export class AgentOrchestrator {
     changedFiles: string[];
     validationResults: TestResult[];
   }): Promise<ContributionPullRequestResult> {
+    const autoProceed = this.isAutonomousAgentEnabled(input.config, input.headless);
     if (input.changedFiles.length === 0) {
       return {
         changedFiles: [],
@@ -1279,7 +1307,7 @@ export class AgentOrchestrator {
       };
     }
 
-    if (!input.headless) {
+    if (!autoProceed) {
       ui.callout({
         label: 'OpenMeta Agent',
         title: 'Create a real draft PR',
@@ -1467,6 +1495,10 @@ export class AgentOrchestrator {
 
   private hasBlockingValidationFailures(results: TestResult[]): boolean {
     return results.some((result) => !result.passed && !this.isInfrastructureValidationFailure(result));
+  }
+
+  private isAutonomousAgentEnabled(config: AppConfig, headless: boolean): boolean {
+    return headless || Boolean(config.automation.autonomousAgentEnabled);
   }
 
   private isInsufficientContextReview(summary: string): boolean {
