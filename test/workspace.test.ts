@@ -402,4 +402,35 @@ describe('workspaceService isolation', () => {
     const status = await runGit.status();
     expect(status.files).toHaveLength(0);
   });
+
+  test('recreates a dirty cache workspace from the source repository', async () => {
+    const seedRepoPath = makeWorkspace();
+    const seedGit = simpleGit(seedRepoPath);
+    await seedGit.init(['--initial-branch=main']);
+    await seedGit.addConfig('user.name', 'OpenMeta Test');
+    await seedGit.addConfig('user.email', 'openmeta@example.com');
+    mkdirSync(join(seedRepoPath, 'src'), { recursive: true });
+    writeFileSync(join(seedRepoPath, 'src', 'index.ts'), 'export const seed = true;\n', 'utf-8');
+    await seedGit.add('src/index.ts');
+    await seedGit.commit('chore: seed');
+
+    const cacheWorkspacePath = makeWorkspace();
+    const clonedCache = await (workspaceService as unknown as {
+      ensureCleanCacheWorkspace: (sourceWorkspacePath: string, repoUrl: string) => Promise<ReturnType<typeof simpleGit>>;
+    }).ensureCleanCacheWorkspace(cacheWorkspacePath, seedRepoPath);
+
+    writeFileSync(join(cacheWorkspacePath, 'dirty.txt'), 'dirty\n', 'utf-8');
+    const dirtyStatus = await clonedCache.status();
+    expect(dirtyStatus.files.length).toBeGreaterThan(0);
+
+    await (workspaceService as unknown as {
+      ensureCleanCacheWorkspace: (sourceWorkspacePath: string, repoUrl: string) => Promise<ReturnType<typeof simpleGit>>;
+    }).ensureCleanCacheWorkspace(cacheWorkspacePath, seedRepoPath);
+
+    expect(existsSync(join(cacheWorkspacePath, 'dirty.txt'))).toBe(false);
+    const recreatedGit = simpleGit(cacheWorkspacePath);
+    const recreatedStatus = await recreatedGit.status();
+    expect(recreatedStatus.files).toHaveLength(0);
+    expect(readFileSync(join(cacheWorkspacePath, 'src', 'index.ts'), 'utf-8').trim()).toBe('export const seed = true;');
+  });
 });

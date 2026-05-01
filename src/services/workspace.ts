@@ -70,13 +70,7 @@ export class WorkspaceService {
     const sourceWorkspacePath = this.getCacheWorkspacePath(issue.repoFullName);
     const repoUrl = `https://github.com/${issue.repoFullName}.git`;
 
-    if (!existsSync(sourceWorkspacePath)) {
-      mkdirSync(dirname(sourceWorkspacePath), { recursive: true });
-      await simpleGit().clone(repoUrl, sourceWorkspacePath);
-    }
-
-    const git = simpleGit(sourceWorkspacePath);
-    await git.fetch('origin');
+    const git = await this.ensureCleanCacheWorkspace(sourceWorkspacePath, repoUrl);
 
     const defaultBranch = await this.detectDefaultBranch(git);
     const runWorkspacePath = await this.createIsolatedWorkspace(git, sourceWorkspacePath, defaultBranch, issue);
@@ -113,6 +107,35 @@ export class WorkspaceService {
       validationWarnings,
       testResults,
     };
+  }
+
+  private async ensureCleanCacheWorkspace(sourceWorkspacePath: string, repoUrl: string): Promise<SimpleGit> {
+    const cloneFresh = async (): Promise<SimpleGit> => {
+      rmSync(sourceWorkspacePath, { recursive: true, force: true });
+      mkdirSync(dirname(sourceWorkspacePath), { recursive: true });
+      await simpleGit().clone(repoUrl, sourceWorkspacePath);
+      return simpleGit(sourceWorkspacePath);
+    };
+
+    if (!existsSync(sourceWorkspacePath)) {
+      return cloneFresh();
+    }
+
+    let git = simpleGit(sourceWorkspacePath);
+    const isRepo = await git.checkIsRepo();
+    if (!isRepo) {
+      logger.warn(`Cache workspace is not a git repository. Recreating: ${sourceWorkspacePath}`);
+      return cloneFresh();
+    }
+
+    const status = await git.status();
+    if (status.files.length > 0) {
+      logger.warn(`Cache workspace is dirty. Recreating from remote: ${sourceWorkspacePath}`);
+      return cloneFresh();
+    }
+
+    await git.fetch('origin');
+    return git;
   }
 
   applyGeneratedChanges(
