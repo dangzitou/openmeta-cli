@@ -257,6 +257,14 @@ If you prefer not to create a global symlink, you can still run the built file d
 | `openmeta config set <key> <value>` | Set a configuration value |
 | `openmeta config reset` | Reset configuration to defaults |
 
+Example provider workflow:
+
+```bash
+openmeta provider config
+openmeta provider save production
+openmeta provider use production --validate
+```
+
 ## Local Paths
 
 OpenMeta maintains a clear local footprint:
