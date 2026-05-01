@@ -202,6 +202,12 @@ export class AgentOrchestrator {
       runChecks,
       headless ? 'headless' : 'interactive',
     ));
+    ui.liveEvent('Workspace prepared', [
+      `Kind: ${workspace.workspaceKind || 'shared'}`,
+      `Source: ${workspace.sourceWorkspacePath || workspace.workspacePath}`,
+      `Run path: ${workspace.runWorkspacePath || workspace.workspacePath}`,
+      `Default branch: ${workspace.defaultBranch}`,
+    ], 'info');
     const memory = memoryService.update(selectedIssue, workspace);
     completedStages.add('prepare');
     this.showWorkspaceSummary(workspace, memory);
@@ -214,6 +220,10 @@ export class AgentOrchestrator {
       tone: 'info',
     }, async () => llmService.generatePatchDraft(selectedIssue, workspace, memory));
     const patchDraft = patchDraftResult.data;
+    ui.liveEvent('Patch draft finished', [
+      `Status: ${patchDraftResult.status}`,
+      `Target files: ${patchDraft.targetFiles.length}`,
+    ], patchDraftResult.status === 'success' ? 'success' : 'warning');
     if (patchDraftResult.status !== 'success') {
       this.showStructuredReviewNotice({
         title: 'Patch strategy requires review',
@@ -620,7 +630,9 @@ export class AgentOrchestrator {
     ]);
 
     ui.keyValues('Workspace details', [
+      { label: 'Kind', value: workspace.workspaceKind || 'shared', tone: workspace.workspaceKind === 'isolated' ? 'success' : 'info' },
       { label: 'Path', value: workspace.workspacePath, tone: 'info' },
+      { label: 'Source path', value: workspace.sourceWorkspacePath || workspace.workspacePath, tone: 'info' },
       { label: 'Default branch', value: workspace.defaultBranch, tone: 'info' },
       { label: 'Working branch', value: workspace.branchName || 'workspace already dirty', tone: 'info' },
       { label: 'Top-level files', value: workspace.topLevelFiles.slice(0, 8).join(', ') || 'n/a', tone: 'info' },
@@ -997,12 +1009,20 @@ export class AgentOrchestrator {
 
     try {
       let implementationWorkspace = workspace;
+      ui.liveEvent('Implementation loop starting', [
+        `Context budget: ${this.getContextBudgetLabel()}`,
+        `Autonomous mode: ${autonomousAgentEnabled ? 'yes' : 'no'}`,
+      ], 'info');
       let implementation = await ui.task({
         title: 'Generating concrete patch',
         doneMessage: 'Concrete patch generated',
         failedMessage: 'Concrete patch generation failed',
         tone: 'info',
       }, async () => llmService.generateImplementationDraft(issue, implementationWorkspace, patchDraft));
+      ui.liveEvent('Implementation round 0 finished', [
+        `Editable files: ${implementationWorkspace.snippets.length}`,
+        `Status: ${implementation.status}`,
+      ], implementation.status === 'success' ? 'success' : 'warning');
 
       const maxExpansionRounds = autonomousAgentEnabled
         ? MAX_AUTONOMOUS_CONTEXT_EXPANSION_ROUNDS
@@ -1054,6 +1074,10 @@ export class AgentOrchestrator {
           failedMessage: 'Concrete patch retry failed',
           tone: 'info',
         }, async () => llmService.generateImplementationDraft(issue, implementationWorkspace, patchDraft));
+        ui.liveEvent(`Implementation round ${round} finished`, [
+          `Editable files: ${implementationWorkspace.snippets.length}`,
+          `Status: ${implementation.status}`,
+        ], implementation.status === 'success' ? 'success' : 'warning');
       }
 
       if (implementation.status !== 'success') {
@@ -1146,6 +1170,9 @@ export class AgentOrchestrator {
           tone: 'info',
         }, async () => workspaceService.runValidationCommands(implementationWorkspace.workspacePath, implementationWorkspace.validationCommands.slice(0, 3)))
         : implementationWorkspace.testResults;
+      ui.liveEvent('Validation review finished', [
+        `Summary: ${this.formatValidationSummary(validationResults)}`,
+      ], this.hasBlockingValidationFailures(validationResults) ? 'warning' : 'success');
 
       if (runChecks && changedFiles.appliedFiles.length > 0 && this.hasBlockingValidationFailures(validationResults)) {
         const repaired = await this.attemptValidationRepair({
@@ -1221,6 +1248,10 @@ export class AgentOrchestrator {
 
     const autoProceed = this.isAutonomousAgentEnabled(input.config, input.headless);
     const shouldCommit = autoProceed ? true : await this.promptForCommitConfirmation();
+    ui.liveEvent('Artifact publish decision', [
+      `Autonomous mode: ${autoProceed ? 'yes' : 'no'}`,
+      `Will commit artifacts: ${shouldCommit ? 'yes' : 'no'}`,
+    ], shouldCommit ? 'info' : 'warning');
     if (!shouldCommit) {
       return { published: false };
     }
@@ -1252,6 +1283,11 @@ export class AgentOrchestrator {
     if (!publishResult) {
       throw new Error('OpenMeta could not publish the generated contribution artifacts.');
     }
+
+    ui.liveEvent('Artifact publish finished', [
+      `Branch: ${publishResult.branch}`,
+      `Files: ${publishResult.fileNames.length}`,
+    ], 'success');
 
     ui.card({
       label: 'OpenMeta Agent',
@@ -1338,6 +1374,12 @@ export class AgentOrchestrator {
         }
       }
     }
+
+    ui.liveEvent('Draft PR submission starting', [
+      `Autonomous mode: ${autoProceed ? 'yes' : 'no'}`,
+      `Changed files: ${input.changedFiles.length}`,
+      `Validation: ${this.formatValidationSummary(input.validationResults)}`,
+    ], 'info');
 
     try {
       const contributionPullRequest = await contributionPrService.submitDraftPullRequest({
@@ -1499,6 +1541,10 @@ export class AgentOrchestrator {
 
   private isAutonomousAgentEnabled(config: AppConfig, headless: boolean): boolean {
     return headless || Boolean(config.automation.autonomousAgentEnabled);
+  }
+
+  private getContextBudgetLabel(): string {
+    return `${(llmService as unknown as { maxContextTokens?: number }).maxContextTokens || 200000} tokens`;
   }
 
   private isInsufficientContextReview(summary: string): boolean {

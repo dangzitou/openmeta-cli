@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { basename, dirname, join, relative, resolve, sep } from 'path';
 import { simpleGit, type SimpleGit } from 'simple-git';
@@ -48,8 +48,17 @@ function slugify(input: string): string {
 }
 
 export class WorkspaceService {
-  private getWorkspacePath(repoFullName: string): string {
-    return join(ensureDirectory(getOpenMetaWorkspaceRoot()), sanitizeRepoName(repoFullName));
+  private getCacheWorkspacePath(repoFullName: string): string {
+    return join(ensureDirectory(getOpenMetaWorkspaceRoot()), '_cache', sanitizeRepoName(repoFullName));
+  }
+
+  private getRunWorkspacePath(repoFullName: string, issue: RankedIssue): string {
+    return join(
+      ensureDirectory(getOpenMetaWorkspaceRoot()),
+      '_runs',
+      sanitizeRepoName(repoFullName),
+      `${Date.now()}-${slugify(issue.title) || 'issue'}`,
+    );
   }
 
   async prepareWorkspace(
@@ -58,48 +67,42 @@ export class WorkspaceService {
     runChecks: boolean,
     executionMode: ExecutionMode = 'interactive',
   ): Promise<RepoWorkspaceContext> {
-    const workspacePath = this.getWorkspacePath(issue.repoFullName);
+    const sourceWorkspacePath = this.getCacheWorkspacePath(issue.repoFullName);
     const repoUrl = `https://github.com/${issue.repoFullName}.git`;
 
-    if (!existsSync(workspacePath)) {
-      mkdirSync(dirname(workspacePath), { recursive: true });
-      await simpleGit().clone(repoUrl, workspacePath);
+    if (!existsSync(sourceWorkspacePath)) {
+      mkdirSync(dirname(sourceWorkspacePath), { recursive: true });
+      await simpleGit().clone(repoUrl, sourceWorkspacePath);
     }
 
-    const git = simpleGit(workspacePath);
+    const git = simpleGit(sourceWorkspacePath);
     await git.fetch('origin');
 
     const defaultBranch = await this.detectDefaultBranch(git);
-    const status = await git.status();
-    const workspaceDirty = status.files.length > 0;
-    const branchName = workspaceDirty ? undefined : await this.createWorkspaceBranchName(git, issue);
+    const runWorkspacePath = await this.createIsolatedWorkspace(git, sourceWorkspacePath, defaultBranch, issue);
+    const runGit = simpleGit(runWorkspacePath);
+    const branchName = await this.createWorkspaceBranchName(runGit, issue);
+    await runGit.checkout(['-B', branchName]);
 
-    if (!workspaceDirty && branchName) {
-      await git.checkout(defaultBranch);
-      try {
-        await git.pull('origin', defaultBranch);
-      } catch (error) {
-        logger.debug('Unable to fast-forward workspace before branch creation', error);
-      }
-
-      await git.checkoutLocalBranch(branchName);
-    }
-
-    const topLevelFiles = readdirSync(workspacePath).slice(0, 50);
-    const discoveredFiles = this.discoverFiles(workspacePath, MAX_DISCOVERED_FILES);
+    const runStatus = await runGit.status();
+    const topLevelFiles = readdirSync(runWorkspacePath).slice(0, 50);
+    const discoveredFiles = this.discoverFiles(runWorkspacePath, MAX_DISCOVERED_FILES);
     const candidateFiles = this.rankCandidateFiles(issue, memory, discoveredFiles).slice(0, 8);
     const snippets = candidateFiles.map((path) => ({
       path,
-      content: this.readSnippet(join(workspacePath, path)),
+      content: this.readSnippet(join(runWorkspacePath, path)),
     }));
-    const testCommands = this.detectTestCommands(workspacePath);
+    const testCommands = this.detectTestCommands(runWorkspacePath);
     const { commands: validationCommands, warnings: validationWarnings } =
       this.selectValidationCommands(testCommands, executionMode);
-    const testResults = runChecks ? this.runTestCommands(workspacePath, validationCommands.slice(0, 3)) : [];
+    const testResults = runChecks ? this.runTestCommands(runWorkspacePath, validationCommands.slice(0, 3)) : [];
 
     return {
-      workspacePath,
-      workspaceDirty,
+      workspacePath: runWorkspacePath,
+      workspaceKind: 'isolated',
+      sourceWorkspacePath,
+      runWorkspacePath,
+      workspaceDirty: runStatus.files.length > 0,
       defaultBranch,
       branchName,
       topLevelFiles,
@@ -252,6 +255,43 @@ export class WorkspaceService {
       ]),
       snippets: this.mergeSnippets(input.workspace.snippets, extraSnippets).slice(0, maxTotalSnippets),
     };
+  }
+
+  private async createIsolatedWorkspace(
+    git: SimpleGit,
+    sourceWorkspacePath: string,
+    defaultBranch: string,
+    issue: RankedIssue,
+  ): Promise<string> {
+    try {
+      await git.checkout(defaultBranch);
+      try {
+        await git.pull('origin', defaultBranch);
+      } catch (error) {
+        logger.debug('Unable to fast-forward cache workspace before creating isolated run workspace', error);
+      }
+    } catch (error) {
+      logger.debug(`Unable to align cache workspace to ${defaultBranch}`, error);
+    }
+
+    const runWorkspacePath = this.getRunWorkspacePath(issue.repoFullName, issue);
+    rmSync(runWorkspacePath, { recursive: true, force: true });
+    mkdirSync(dirname(runWorkspacePath), { recursive: true });
+
+    try {
+      await git.raw(['worktree', 'prune']);
+      await git.raw(['worktree', 'add', '--detach', runWorkspacePath, `origin/${defaultBranch}`]);
+      logger.info(`Prepared isolated workspace via git worktree: ${runWorkspacePath}`);
+      return runWorkspacePath;
+    } catch (error) {
+      logger.debug('Unable to create isolated workspace via git worktree, falling back to local clone', error);
+    }
+
+    await simpleGit().clone(sourceWorkspacePath, runWorkspacePath, ['--no-local']);
+    const runGit = simpleGit(runWorkspacePath);
+    await runGit.checkout(defaultBranch);
+    logger.info(`Prepared isolated workspace via local clone fallback: ${runWorkspacePath}`);
+    return runWorkspacePath;
   }
 
   private async detectDefaultBranch(git: SimpleGit): Promise<string> {

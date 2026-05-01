@@ -66,6 +66,9 @@ export interface ImplementationDraft {
 
 export interface RepoWorkspaceContext {
   workspacePath: string;
+  workspaceKind?: 'shared' | 'isolated';
+  sourceWorkspacePath?: string;
+  runWorkspacePath?: string;
   workspaceDirty: boolean;
   defaultBranch: string;
   branchName?: string;

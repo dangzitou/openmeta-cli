@@ -285,6 +285,21 @@ function printList(lines: string[], tone: Tone = 'muted'): void {
   }
 }
 
+function printLiveEvent(title: string, lines: string[] = [], tone: Tone = 'info'): void {
+  const accent = paletteForTone(tone).accent;
+  p.log.message(accent(`${figures.pointerSmall} ${title}`), {
+    symbol: ' ',
+    withGuide: false,
+  });
+
+  for (const line of lines) {
+    p.log.message(chalk.gray(`  ${line}`), {
+      symbol: ' ',
+      withGuide: false,
+    });
+  }
+}
+
 function printKeyValues(capabilities: UiCapabilities, title: string, items: KeyValueItem[]): void {
   const width = Math.max(44, Math.min(capabilities.width - 2, 106));
   const labelWidth = Math.min(24, Math.max(...items.map((item) => item.label.length), 12));
@@ -528,6 +543,10 @@ export const ui = {
 
   list(lines: string[], tone: Tone = 'muted'): void {
     printList(lines, tone);
+  },
+
+  liveEvent(title: string, lines: string[] = [], tone: Tone = 'info'): void {
+    printLiveEvent(title, lines, tone);
   },
 
   keyValues(title: string, items: KeyValueItem[]): void {

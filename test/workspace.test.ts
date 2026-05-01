@@ -367,3 +367,39 @@ describe('workspaceService.expandImplementationContext', () => {
     expect(expanded.snippets.filter((snippet) => snippet.path.startsWith('src/order-'))).toHaveLength(2);
   });
 });
+
+describe('workspaceService isolation', () => {
+  test('creates an isolated run workspace even when the cache workspace is dirty', async () => {
+    const sourceWorkspacePath = makeWorkspace();
+    mkdirSync(join(sourceWorkspacePath, 'src'), { recursive: true });
+
+    const git = simpleGit(sourceWorkspacePath);
+    await git.init(['--initial-branch=main']);
+    await git.addConfig('user.name', 'OpenMeta Test');
+    await git.addConfig('user.email', 'openmeta@example.com');
+    writeFileSync(join(sourceWorkspacePath, 'src', 'index.ts'), 'export const ready = true;\n', 'utf-8');
+    await git.add('src/index.ts');
+    await git.commit('chore: initial commit');
+
+    writeFileSync(join(sourceWorkspacePath, 'src', 'dirty.ts'), 'export const dirty = true;\n', 'utf-8');
+
+    const runWorkspacePath = await (workspaceService as unknown as {
+      createIsolatedWorkspace: (
+        gitInstance: ReturnType<typeof simpleGit>,
+        sourcePath: string,
+        defaultBranch: string,
+        issue: ReturnType<typeof createRankedIssue>,
+      ) => Promise<string>;
+    }).createIsolatedWorkspace(git, sourceWorkspacePath, 'main', createRankedIssue());
+
+    tempDirs.push(runWorkspacePath);
+
+    expect(runWorkspacePath).not.toBe(sourceWorkspacePath);
+    expect(existsSync(join(runWorkspacePath, 'src', 'index.ts'))).toBe(true);
+    expect(existsSync(join(runWorkspacePath, 'src', 'dirty.ts'))).toBe(false);
+
+    const runGit = simpleGit(runWorkspacePath);
+    const status = await runGit.status();
+    expect(status.files).toHaveLength(0);
+  });
+});
