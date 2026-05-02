@@ -95,6 +95,9 @@ Requirements:
 3. Target files must be concrete and repository-relative.
 4. Proposed changes must describe specific implementation steps.
 5. Risks and validation notes must be honest and concrete.
+6. Prefer real business implementation entry points first: route, service, validator, query-config, and tests.
+7. Unless the issue is clearly about docs, CI, or configuration, do not use workflow, README, or dev config files as primary target files.
+8. If the exact entry point is uncertain, return a small set of high-confidence implementation files instead of broad or low-signal files.
 
 Output schema:
 {

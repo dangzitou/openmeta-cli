@@ -262,6 +262,32 @@ describe('workspaceService.detectTestCommands', () => {
 
     expect(rankedFiles[0]).toBe('src/components/IconButton.tsx');
   });
+
+  test('downranks low-signal workflow and config files compared with business implementation files', () => {
+    const rankedFiles = (workspaceService as unknown as {
+      rankCandidateFiles: (
+        issue: { title: string; body: string; analysis: { coreDemand: string; techRequirements: string[] } },
+        memory: { preferredPaths: string[]; pathSignals?: never[]; recentIssues?: never[] },
+        files: string[],
+      ) => string[];
+    }).rankCandidateFiles({
+      title: 'Optimize admin variant updates for large products',
+      body: 'Investigate packages/medusa/src/api/admin/products/[id]/variants/[variant_id]/route.ts and related service logic.',
+      analysis: {
+        coreDemand: 'Speed up variant updates in the admin API and service layer.',
+        techRequirements: ['typescript', 'api', 'services'],
+      },
+    }, { preferredPaths: [] }, [
+      '.github/workflows/test-cli-with-database.yml',
+      'packages/modules/product/mikro-orm.config.dev.ts',
+      'packages/medusa/src/api/admin/products/[id]/variants/[variant_id]/route.ts',
+      'packages/modules/product/src/services/product-module-service.ts',
+    ]);
+
+    expect(rankedFiles[0]).toBe('packages/medusa/src/api/admin/products/[id]/variants/[variant_id]/route.ts');
+    expect(rankedFiles[1]).toBe('packages/modules/product/src/services/product-module-service.ts');
+    expect(rankedFiles.at(-1)).toBe('.github/workflows/test-cli-with-database.yml');
+  });
 });
 
 describe('workspaceService.expandImplementationContext', () => {
@@ -365,6 +391,61 @@ describe('workspaceService.expandImplementationContext', () => {
 
     expect(expanded.snippets).toHaveLength(4);
     expect(expanded.snippets.filter((snippet) => snippet.path.startsWith('src/order-'))).toHaveLength(2);
+  });
+
+  test('prefers neighbor files around target paths before low-signal global matches', () => {
+    const workspacePath = makeWorkspace();
+    mkdirSync(join(workspacePath, 'packages', 'modules', 'product', 'src', 'services'), { recursive: true });
+    mkdirSync(join(workspacePath, '.github', 'workflows'), { recursive: true });
+    writeFileSync(join(workspacePath, 'packages', 'modules', 'product', 'src', 'services', 'product-module-service.ts'), 'export class ProductModuleService {}\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'packages', 'modules', 'product', 'src', 'services', 'product-module-service.test.ts'), 'test("product service", () => {});\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'packages', 'modules', 'product', 'src', 'services', 'product-variant-service.ts'), 'export class ProductVariantService {}\n', 'utf-8');
+    writeFileSync(join(workspacePath, '.github', 'workflows', 'product-variant-service.yml'), 'name: workflow\n', 'utf-8');
+
+    const expanded = workspaceService.expandImplementationContext({
+      issue: createRankedIssue({
+        title: 'Speed up product variant updates',
+        body: 'The bug is around product variant update service behavior.',
+        analysis: {
+          coreDemand: 'Optimize product variant service updates.',
+          techRequirements: ['typescript', 'services', 'api'],
+          solutionSuggestion: '',
+          estimatedWorkload: '2-4 hours',
+        },
+      }),
+      patchDraft: createPatchDraft({
+        targetFiles: [
+          {
+            path: 'packages/modules/product/src/services/product-module-service.ts',
+            reason: 'Core service implementation',
+          },
+        ],
+        proposedChanges: [
+          {
+            title: 'Add focused service changes',
+            details: 'Update neighboring variant service behavior and tests.',
+            files: [
+              'packages/modules/product/src/services/product-variant-service.ts',
+              'packages/modules/product/src/services/product-module-service.test.ts',
+            ],
+          },
+        ],
+      }),
+      workspace: createWorkspace({
+        workspacePath,
+        candidateFiles: ['packages/modules/product/src/services/product-module-service.ts'],
+        snippets: [{
+          path: 'packages/modules/product/src/services/product-module-service.ts',
+          content: 'export class ProductModuleService {}\n',
+        }],
+      }),
+      round: 1,
+      maxNewFiles: 3,
+    });
+
+    expect(expanded.snippets.map((snippet) => snippet.path)).toContain('packages/modules/product/src/services/product-variant-service.ts');
+    expect(expanded.snippets.map((snippet) => snippet.path)).toContain('packages/modules/product/src/services/product-module-service.test.ts');
+    expect(expanded.snippets.map((snippet) => snippet.path)).not.toContain('.github/workflows/product-variant-service.yml');
   });
 });
 

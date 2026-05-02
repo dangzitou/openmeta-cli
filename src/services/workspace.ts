@@ -34,6 +34,15 @@ const MAX_GENERATED_FILE_CHARS = 60_000;
 const DEFAULT_CONTEXT_EXPANSION_LIMIT = 8;
 const DEFAULT_CONTEXT_SNIPPET_LIMIT = 24;
 type ExecutionMode = 'interactive' | 'headless';
+const HIGH_SIGNAL_PATH_SEGMENTS = ['src', 'api', 'services', '__tests__', 'test', 'tests'];
+const HIGH_SIGNAL_FILE_FRAGMENTS = ['route', 'service', 'validator', 'query-config', 'workflow'];
+const LOW_SIGNAL_PATH_PATTERNS = [
+  /^\.github\/workflows\//,
+  /(^|\/)readme\.md$/i,
+  /\.config\.dev\.[a-z]+$/i,
+  /(^|\/)ormconfig(\.[a-z0-9_-]+)?\.(json|js|ts)$/i,
+  /^www\/utils\/packages\/typedoc-config\//,
+];
 
 function sanitizeRepoName(repoFullName: string): string {
   return repoFullName.replace(/\//g, '__');
@@ -254,13 +263,14 @@ export class WorkspaceService {
     const targetPaths = this.extractPatchDraftPaths(input.patchDraft);
     const keywords = this.buildContextKeywords(input.issue, input.patchDraft);
     const discoveredFiles = this.discoverFiles(input.workspace.workspacePath, MAX_CONTEXT_DISCOVERY_FILES);
-    const nextPaths = this.rankContextExpansionFiles({
+    const rankedPaths = this.rankContextExpansionFiles({
       files: discoveredFiles,
       existingPaths,
       targetPaths,
       keywords,
       round: input.round,
-    }).slice(0, Math.min(maxNewFiles, availableSlots));
+    });
+    const nextPaths = rankedPaths.slice(0, Math.min(maxNewFiles, availableSlots));
 
     if (nextPaths.length === 0) {
       logger.info(`Context expansion round ${input.round} found no additional files.`);
@@ -397,19 +407,34 @@ export class WorkspaceService {
     keywords: string[];
     round: number;
   }): string[] {
-    return [...input.files]
+    const focusDirectories = this.collectFocusDirectories(input.targetPaths);
+    const candidates = [...input.files]
       .filter((path) => !input.existingPaths.has(path))
       .filter((path) => this.isLikelyContextFile(path))
+      .filter((path) => !this.isLowSignalContextPath(path))
       .sort((left, right) =>
-        this.scoreContextExpansionPath(right, input.keywords, input.targetPaths, input.round) -
-        this.scoreContextExpansionPath(left, input.keywords, input.targetPaths, input.round)
+        this.scoreContextExpansionPath(right, input.keywords, input.targetPaths, focusDirectories, input.round) -
+        this.scoreContextExpansionPath(left, input.keywords, input.targetPaths, focusDirectories, input.round)
       );
+
+    const neighborCandidates = candidates.filter((path) => this.isNeighborCandidate(path, input.targetPaths, focusDirectories));
+    const fallbackCandidates = candidates.filter((path) => !neighborCandidates.includes(path));
+
+    return [...neighborCandidates, ...fallbackCandidates];
   }
 
-  private scoreContextExpansionPath(path: string, keywords: string[], targetPaths: string[], round: number): number {
+  private scoreContextExpansionPath(
+    path: string,
+    keywords: string[],
+    targetPaths: string[],
+    focusDirectories: string[],
+    round: number,
+  ): number {
     let score = 0;
     const lowerPath = path.toLowerCase();
     const fileName = basename(lowerPath);
+
+    score -= this.lowSignalPenalty(lowerPath);
 
     for (const targetPath of targetPaths) {
       const lowerTarget = targetPath.toLowerCase();
@@ -419,6 +444,14 @@ export class WorkspaceService {
         score += 80;
       } else if (lowerPath.includes(lowerTarget) || fileName === basename(lowerTarget)) {
         score += 45;
+      }
+    }
+
+    for (const focusDirectory of focusDirectories) {
+      if (lowerPath.startsWith(focusDirectory)) {
+        score += 60;
+      } else if (lowerPath.includes(`${focusDirectory}/`)) {
+        score += 24;
       }
     }
 
@@ -437,8 +470,13 @@ export class WorkspaceService {
     if (/\.(ts|tsx|js|jsx|py|go|rs|java|kt)$/.test(fileName)) {
       score += 6;
     }
-    if (lowerPath.includes('/src/') || lowerPath.startsWith('src/')) {
-      score += 5;
+
+    if (this.matchesHighSignalPath(lowerPath)) {
+      score += 12;
+    }
+
+    if (this.matchesHighSignalFile(fileName)) {
+      score += 16;
     }
 
     return score;
@@ -451,6 +489,8 @@ export class WorkspaceService {
     const recentIssues = memory.recentIssues ?? [];
     const pathSignal = pathSignals.find((signal) => signal.path === path);
     const recentIssue = recentIssues.find((issue) => issue.changedFiles.includes(path));
+
+    score -= this.lowSignalPenalty(lowerPath);
 
     for (const keyword of keywords) {
       if (lowerPath.includes(keyword)) {
@@ -500,6 +540,14 @@ export class WorkspaceService {
       score += 4;
     }
 
+    if (this.matchesHighSignalPath(lowerPath)) {
+      score += 10;
+    }
+
+    if (this.matchesHighSignalFile(fileName)) {
+      score += 14;
+    }
+
     return score;
   }
 
@@ -545,6 +593,42 @@ export class WorkspaceService {
     ].map((path) => path.replace(/^\/+/, '').trim()).filter(Boolean));
   }
 
+  private collectFocusDirectories(paths: string[]): string[] {
+    const directories = new Set<string>();
+
+    for (const path of paths) {
+      const normalized = path.toLowerCase();
+      const segments = normalized.split('/').filter(Boolean);
+      if (segments.length <= 1) {
+        continue;
+      }
+
+      directories.add(segments.slice(0, -1).join('/'));
+      if (segments.length > 2) {
+        directories.add(segments.slice(0, -2).join('/'));
+      }
+    }
+
+    return [...directories].filter(Boolean);
+  }
+
+  private isNeighborCandidate(path: string, targetPaths: string[], focusDirectories: string[]): boolean {
+    const lowerPath = path.toLowerCase();
+    const fileName = basename(lowerPath);
+
+    if (focusDirectories.some((directory) => lowerPath.startsWith(directory) || lowerPath.includes(`${directory}/`))) {
+      return true;
+    }
+
+    return targetPaths.some((targetPath) => {
+      const lowerTarget = targetPath.toLowerCase();
+      const targetFileName = basename(lowerTarget);
+      return fileName === targetFileName ||
+        fileName.includes(targetFileName.replace(/\.[^.]+$/, '')) ||
+        targetFileName.includes(fileName.replace(/\.[^.]+$/, ''));
+    });
+  }
+
   private isLikelyContextFile(path: string): boolean {
     return /\.(ts|tsx|js|jsx|py|go|rs|java|kt|json|md|css|scss|yml|yaml)$/.test(path.toLowerCase());
   }
@@ -567,6 +651,24 @@ export class WorkspaceService {
       'test',
       'tests',
     ]).has(token);
+  }
+
+  private matchesHighSignalPath(path: string): boolean {
+    return HIGH_SIGNAL_PATH_SEGMENTS.some((segment) =>
+      path.startsWith(`${segment}/`) || path.includes(`/${segment}/`)
+    );
+  }
+
+  private matchesHighSignalFile(fileName: string): boolean {
+    return HIGH_SIGNAL_FILE_FRAGMENTS.some((fragment) => fileName.includes(fragment));
+  }
+
+  private lowSignalPenalty(path: string): number {
+    return LOW_SIGNAL_PATH_PATTERNS.some((pattern) => pattern.test(path)) ? 80 : 0;
+  }
+
+  private isLowSignalContextPath(path: string): boolean {
+    return LOW_SIGNAL_PATH_PATTERNS.some((pattern) => pattern.test(path.toLowerCase()));
   }
 
   private mergeSnippets(current: RepoFileSnippet[], next: RepoFileSnippet[]): RepoFileSnippet[] {

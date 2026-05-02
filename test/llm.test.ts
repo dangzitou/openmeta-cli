@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { LLMService } from '../src/services/llm.js';
+import { PATCH_DRAFT_PROMPT } from '../src/infra/prompt-templates.js';
 import type { StructuredOutputStatus } from '../src/contracts/index.js';
 import type { ImplementationDraft, MatchedIssue } from '../src/types/index.js';
 import { createIssue, createMemory } from './helpers/factories.js';
@@ -393,5 +394,12 @@ describe('LLMService repo memory formatting', () => {
     expect(formatted).toContain('bun test | failures 1 | last exit 1');
     expect(formatted).toContain('Recent Issue Outcomes:');
     expect(formatted).toContain('acme/demo#42 | status published');
+  });
+});
+
+describe('Patch draft prompt guidance', () => {
+  test('explicitly biases the model toward implementation entry points', () => {
+    expect(PATCH_DRAFT_PROMPT).toContain('route, service, validator, query-config, and tests');
+    expect(PATCH_DRAFT_PROMPT).toContain('do not use workflow, README, or dev config files as primary target files');
   });
 });
