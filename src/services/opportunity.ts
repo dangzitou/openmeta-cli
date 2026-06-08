@@ -26,10 +26,15 @@ const LARGE_SCOPE_PATTERNS = [
 	/\bbreaking change\b/i,
 ];
 
+/** Clamp a numeric score to the 0–100 integer range. */
 function clampScore(value: number): number {
 	return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+/**
+ * Compute a freshness score based on how recently the issue was updated.
+ * Issues updated within 24 h score 100; older issues decay toward 42.
+ */
 function computeFreshnessScore(updatedAt: string): number {
 	const hours = (Date.now() - new Date(updatedAt).getTime()) / (1000 * 60 * 60);
 
@@ -41,6 +46,10 @@ function computeFreshnessScore(updatedAt: string): number {
 	return 42;
 }
 
+/**
+ * Rate onboarding clarity based on labels, body length, and reproduction signals.
+ * Well-labeled issues with descriptive bodies score higher.
+ */
 function computeOnboardingClarity(issue: MatchedIssue): number {
 	const labels = issue.labels.map(normalizeLabel);
 	const body = issue.body.trim();
