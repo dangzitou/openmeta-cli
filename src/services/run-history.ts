@@ -3,7 +3,9 @@ import { join } from 'path';
 import { ensureDirectory, getOpenMetaStateDir } from '../infra/index.js';
 import type { AgentRunRecord, AgentRunStatus } from '../types/index.js';
 
+/** Persisted state for the run history ledger. */
 interface RunHistoryState {
+	/** Most recent agent run records, newest first, capped at 100. */
 	records: AgentRunRecord[];
 }
 
@@ -11,6 +13,7 @@ function defaultState(): RunHistoryState {
 	return { records: [] };
 }
 
+/** Generate a unique run identifier from an ISO timestamp. */
 function createRunId(startedAt: string): string {
 	const stamp = startedAt.replace(/[-:T.Z]/g, '').slice(0, 14);
 	const suffix = Math.random().toString(36).slice(2, 8);
