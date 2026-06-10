@@ -5,6 +5,7 @@ import type {
 	ScoringWeights,
 } from '../types/index.js';
 
+/** Built-in scoring presets that weight different evaluation dimensions. */
 export const SCORING_PRESETS: ScoringPreset[] = [
 	{
 		name: 'balanced',
@@ -79,10 +80,18 @@ export const DEFAULT_SCORING: ScoringConfig = {
 	preset: 'balanced',
 };
 
+/** Return the preset with the given name, or undefined if not found. */
 export function getPreset(name: string): ScoringPreset | undefined {
 	return SCORING_PRESETS.find((p) => p.name === name);
 }
 
+/**
+ * Normalize scoring weights so that the four primary dimensions sum to 1.0.
+ *
+ * The `riskPenalty` weight is left unchanged since it operates as an
+ * independent penalty multiplier rather than a dimension share.
+ * Falls back to the default balanced weights when all dimensions are zero.
+ */
 export function normalizeWeights(weights: ScoringWeights): ScoringWeights {
 	const sum =
 		weights.freshness + weights.onboardingClarity + weights.mergePotential + weights.impact;
@@ -98,6 +107,7 @@ export function normalizeWeights(weights: ScoringWeights): ScoringWeights {
 	};
 }
 
+/** Normalize overall weights so that technicalMatch + opportunityScore = 1.0. */
 export function normalizeOverallWeights(weights: OverallWeights): OverallWeights {
 	const sum = weights.technicalMatch + weights.opportunityScore;
 	if (sum === 0) {
