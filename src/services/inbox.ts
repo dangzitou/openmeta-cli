@@ -3,7 +3,9 @@ import { join } from 'path';
 import { ensureDirectory, getLocalDateStamp, getOpenMetaStateDir } from '../infra/index.js';
 import type { ContributionInboxItem } from '../types/index.js';
 
+/** Persisted state for the contribution inbox. */
 interface InboxState {
+	/** Items sorted by descending overallScore. */
 	items: ContributionInboxItem[];
 }
 
@@ -11,15 +13,24 @@ function defaultState(): InboxState {
 	return { items: [] };
 }
 
+/**
+ * Manages the local contribution inbox — a ranked list of discovered
+ * open-source opportunities the agent has evaluated.
+ *
+ * State is persisted as JSON in the OpenMeta state directory. Writes use
+ * an atomic tmp-then-rename pattern to avoid corruption on crash.
+ */
 export class InboxService {
 	private getInboxPath(): string {
 		return join(ensureDirectory(getOpenMetaStateDir()), 'inbox.json');
 	}
 
+	/** Return the absolute path to the inbox JSON file. */
 	getPath(): string {
 		return this.getInboxPath();
 	}
 
+	/** Load the inbox state from disk, returning an empty inbox if missing. */
 	load(): InboxState {
 		const path = this.getInboxPath();
 
@@ -33,6 +44,15 @@ export class InboxService {
 		};
 	}
 
+	/**
+	 * Upsert an item into the inbox.
+	 *
+	 * If an item with the same `id` already exists it is replaced; otherwise
+	 * the new item is prepended. The resulting list is sorted by descending
+	 * `overallScore` before persisting.
+	 *
+	 * @returns The updated items list after save.
+	 */
 	saveItem(item: ContributionInboxItem): ContributionInboxItem[] {
 		const state = this.load();
 		const items = [item, ...state.items.filter((entry) => entry.id !== item.id)].sort(
@@ -55,6 +75,7 @@ export class InboxService {
 		return items;
 	}
 
+	/** Render the inbox as a human-readable Markdown document. */
 	renderMarkdown(items: ContributionInboxItem[]): string {
 		const lines = [
 			'# Contribution Inbox',
