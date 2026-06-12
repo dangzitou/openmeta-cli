@@ -89,6 +89,11 @@ function computeOnboardingClarity(issue: MatchedIssue): number {
 	return clampScore(score);
 }
 
+/**
+ * Estimate how likely the issue is to get merged based on repo popularity,
+ * label activity, and freshness. Higher star counts and labeled issues
+ * increase confidence; risk factors dampen the score.
+ */
 function computeMergePotential(
 	issue: MatchedIssue,
 	freshnessScore: number,
@@ -100,6 +105,7 @@ function computeMergePotential(
 	return clampScore(35 + starSignal + labelSignal + freshnessScore * 0.25 - riskPenalty * 0.55);
 }
 
+/** Compute an impact score reflecting the repository's reach and visibility. */
 function computeImpactScore(issue: MatchedIssue): number {
 	return clampScore(20 + Math.log10(issue.repoStars + 10) * 28);
 }
