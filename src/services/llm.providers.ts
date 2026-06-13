@@ -1,15 +1,30 @@
 import type { LLMProvider } from '../types/index.js';
 
+/**
+ * Describes a known LLM provider with its default base URL,
+ * supported model list, and optional configuration flags.
+ *
+ * Used by the interactive setup wizard and the `doctor` command
+ * to present provider choices and validate connection settings.
+ */
 export interface LLMProviderPreset {
+	/** Human-readable provider name shown in the UI. */
 	name: string;
+	/** Internal identifier matching the {@link LLMProvider} union type. */
 	value: LLMProvider;
+	/** Default API base URL for this provider. */
 	baseUrl: string;
+	/** Known model identifiers with display names. */
 	models: Array<{ name: string; value: string }>;
+	/** Whether the user may specify a custom model name. */
 	allowCustomModel?: boolean;
+	/** Whether the user may override the base URL. */
 	allowCustomBaseUrl?: boolean;
+	/** Extra headers required by this provider (e.g. custom auth schemes). */
 	apiHeaders?: Record<string, string>;
 }
 
+/** Built-in LLM provider presets with default endpoints and model lists. */
 export const LLM_PROVIDER_PRESETS: LLMProviderPreset[] = [
 	{
 		name: 'OpenAI',
