@@ -20,15 +20,24 @@ function createRunId(startedAt: string): string {
 	return `run_${stamp}_${suffix}`;
 }
 
+/**
+ * Tracks recent agent command executions as an append-only ledger.
+ *
+ * Records are persisted as JSON in the OpenMeta state directory.  At most
+ * 100 entries are retained (newest first); older entries are pruned on
+ * every write.
+ */
 export class RunHistoryService {
 	private getStatePath(): string {
 		return join(ensureDirectory(getOpenMetaStateDir()), 'runs.json');
 	}
 
+	/** Return the absolute path to the run history JSON file. */
 	getPath(): string {
 		return this.getStatePath();
 	}
 
+	/** Load the run history state from disk, returning an empty history if missing. */
 	load(): RunHistoryState {
 		const path = this.getStatePath();
 
@@ -42,6 +51,7 @@ export class RunHistoryService {
 		};
 	}
 
+	/** Create and persist a new running agent run record. */
 	start(input: { commandName: string; args: string[] }): AgentRunRecord {
 		const startedAt = new Date().toISOString();
 		const record: AgentRunRecord = {
@@ -84,6 +94,7 @@ export class RunHistoryService {
 		return updated;
 	}
 
+	/** Look up a run record by its id. */
 	find(id: string): AgentRunRecord | undefined {
 		return this.load().records.find((record) => record.id === id);
 	}
