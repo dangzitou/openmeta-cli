@@ -15,7 +15,13 @@ import type {
 	RepoWorkspaceContext,
 } from '../types/index.js';
 
+/**
+ * Renders generated content (research notes, diary entries, patch drafts,
+ * PR drafts, inbox items, proof-of-work records, and repo memory) into
+ * human-readable markdown for local artifact persistence.
+ */
 export class ContentService {
+	/** Build a research-note artifact from matched issues and report text. */
 	generateResearchNote(issues: MatchedIssue[], reportContent: string): GeneratedContent {
 		const title = `Daily Open Source Issue Research Notes - ${getLocalDateStamp()}`;
 
@@ -28,6 +34,7 @@ export class ContentService {
 		};
 	}
 
+	/** Build a development-diary artifact from matched issues and diary text. */
 	generateDiary(issues: MatchedIssue[], diaryContent: string): GeneratedContent {
 		const title = `Daily Development Diary - ${getLocalDateStamp()}`;
 
@@ -40,6 +47,7 @@ export class ContentService {
 		};
 	}
 
+	/** Render a GeneratedContent as a full markdown document with related-issue details. */
 	formatAsMarkdown(content: GeneratedContent): string {
 		let md = `# ${content.title}\n\n`;
 		md += `Generated at: ${content.generatedAt}\n\n`;
