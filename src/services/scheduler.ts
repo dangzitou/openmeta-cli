@@ -21,6 +21,7 @@ interface CommandResult {
 	message?: string;
 }
 
+/** Result of a scheduler sync operation — describes what was installed or removed. */
 export interface SchedulerSyncResult {
 	provider: SchedulerProvider;
 	status: SchedulerSyncStatus;
@@ -29,7 +30,16 @@ export interface SchedulerSyncResult {
 	command?: string;
 }
 
+/**
+ * Manages OS-level automation scheduling for the OpenMeta agent.
+ *
+ * Supports macOS launchd and Linux cron as scheduling backends.
+ * The service detects the current platform, installs or removes
+ * the appropriate scheduler entry, and exposes the scheduled
+ * command string for manual configuration on unsupported platforms.
+ */
 export class SchedulerService {
+	/** Detect the platform-appropriate scheduler provider. */
 	detectProvider(): SchedulerProvider {
 		if (process.platform === 'darwin') {
 			return 'launchd';
@@ -42,6 +52,13 @@ export class SchedulerService {
 		return 'manual';
 	}
 
+	/**
+	 * Synchronize the scheduler with the current app configuration.
+	 *
+	 * Installs or removes the automation entry based on whether
+	 * `config.automation.enabled` is set. Returns a result describing
+	 * what was done and where the schedule lives.
+	 */
 	async sync(config: AppConfig): Promise<SchedulerSyncResult> {
 		const provider = this.detectProvider();
 
