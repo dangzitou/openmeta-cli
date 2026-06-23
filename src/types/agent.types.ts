@@ -114,6 +114,7 @@ export interface RepoMemoryValidationSignal {
 	sampleOutput?: string;
 }
 
+/** Persistent state for a single repository across multiple agent runs. */
 export interface RepoMemory {
 	repoFullName: string;
 	firstSeenAt: string;
@@ -160,6 +161,7 @@ export interface ProofOfWorkRecord {
 	pullRequestNumber?: number;
 }
 
+/** Paths to all locally-written artifacts from a single agent run. */
 export interface ContributionArtifacts {
 	artifactDir: string;
 	dossierPath: string;
@@ -170,6 +172,7 @@ export interface ContributionArtifacts {
 	proofOfWorkPath: string;
 }
 
+/** Complete output bundle from a single contribution agent run. */
 export interface ContributionAgentResult {
 	issue: RankedIssue;
 	workspace: RepoWorkspaceContext;
