@@ -76,9 +76,11 @@ function createDefaultConfig(): AppConfig {
 	};
 }
 
+/** Manages loading, saving, encrypting, and normalising the OpenMeta CLI configuration. */
 export class ConfigService {
 	private config: AppConfig | null = null;
 
+	/** Load the configuration from disk, falling back to defaults when the file is missing. */
 	async load(): Promise<AppConfig> {
 		const configFilePath = getConfigFilePath();
 
@@ -105,6 +107,7 @@ export class ConfigService {
 		return this.config;
 	}
 
+	/** Persist the configuration to disk, encrypting sensitive fields first. */
 	async save(config: AppConfig): Promise<void> {
 		const configDirPath = getConfigDirPath();
 		const configFilePath = getConfigFilePath();
@@ -119,6 +122,7 @@ export class ConfigService {
 		logger.success('Configuration saved successfully');
 	}
 
+	/** Return the cached config, loading from disk if not yet loaded. */
 	async get(): Promise<AppConfig> {
 		if (!this.config) {
 			return this.load();
@@ -126,6 +130,7 @@ export class ConfigService {
 		return this.config;
 	}
 
+	/** Merge a partial config into the current one and persist. */
 	async update(partial: Partial<AppConfig>): Promise<AppConfig> {
 		const current = await this.get();
 		const updated: AppConfig = {
@@ -140,6 +145,7 @@ export class ConfigService {
 		return updated;
 	}
 
+	/** Reset the configuration to defaults, creating a backup of the current file. */
 	async reset(): Promise<void> {
 		const configFilePath = getConfigFilePath();
 
