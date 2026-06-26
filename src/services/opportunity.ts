@@ -110,6 +110,7 @@ function computeImpactScore(issue: MatchedIssue): number {
 	return clampScore(20 + Math.log10(issue.repoStars + 10) * 28);
 }
 
+/** Build a one-line human summary highlighting the strongest and weakest signals. */
 function summarizeOpportunity(opportunity: OpportunityAnalysis): string {
 	const strongest = Object.entries(opportunity.breakdown).sort(
 		(left, right) => right[1] - left[1],
@@ -126,10 +127,12 @@ function summarizeOpportunity(opportunity: OpportunityAnalysis): string {
 	return `Strongest signal: ${strongest[0]} (${strongest[1]}). Main risk: ${weakest[0]} (${weakest[1]}).`;
 }
 
+/** Normalize a GitHub label to lowercase with single spaces. */
 function normalizeLabel(label: string): string {
 	return label.toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+/** Check whether the issue carries any labels that signal low actionability. */
 function hasRiskLabel(issue: MatchedIssue): boolean {
 	return issue.labels
 		.map(normalizeLabel)
@@ -152,6 +155,10 @@ function mentionsReproductionSignal(content: string): boolean {
 	);
 }
 
+/**
+ * Compute a composite risk penalty from problem labels, thin descriptions,
+ * large-scope language, and blocking dependencies.  Capped at 45.
+ */
 function computeRiskPenalty(issue: MatchedIssue): number {
 	let penalty = 0;
 	const content = `${issue.title}\n${issue.body}`;
