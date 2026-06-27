@@ -66,6 +66,7 @@ export class RunHistoryService {
 		return record;
 	}
 
+	/** Mark a running agent run as finished with the given status and optional error. */
 	finish(
 		id: string,
 		status: Exclude<AgentRunStatus, 'running'>,
