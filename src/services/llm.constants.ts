@@ -1,5 +1,10 @@
+/** Maximum time in milliseconds to wait for an LLM provider validation response. */
 export const LLM_VALIDATION_TIMEOUT_MS = 120_000;
+
+/** Minimal prompt used to verify that a provider endpoint is reachable and returns valid output. */
 export const LLM_VALIDATION_PROMPT = 'Reply with exactly: OK';
+
+/** Request parameters tuned for minimal token consumption during provider validation. */
 export const LLM_VALIDATION_REQUEST = {
 	// 把验证请求压到最小，减少 token 消耗，也避免部分模型顺手输出一大段内容。
 	temperature: 0,
@@ -8,6 +13,7 @@ export const LLM_VALIDATION_REQUEST = {
 	stream: false,
 } as const;
 
+/** Human-readable hints for common HTTP status codes returned by LLM providers. */
 export const LLM_VALIDATION_STATUS_HINTS: Record<number, string> = {
 	400: 'The provider rejected the request. Check the base URL, request format, and model name.',
 	401: 'Authentication failed. Check that the API key is correct and still active.',
@@ -21,6 +27,7 @@ export const LLM_VALIDATION_STATUS_HINTS: Record<number, string> = {
 	504: 'The provider gateway timed out while processing the request.',
 };
 
+/** Human-readable hints for non-HTTP failure modes during LLM provider validation. */
 export const LLM_VALIDATION_FALLBACK_HINTS = {
 	timeout: 'The validation request timed out before the provider returned a response.',
 	aborted: 'The validation request was aborted before a response was received.',
