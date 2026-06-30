@@ -4,27 +4,53 @@ import { type SimpleGit, simpleGit } from 'simple-git';
 import { getDailyNoteFileName } from '../infra/date.js';
 import { logger } from '../infra/logger.js';
 
+/** Result returned after publishing files to a git repository. */
 export interface GitPublishResult {
+	/** The branch that was checked out for the publish. */
 	branch: string;
+	/** Relative file paths that were written. */
 	fileNames: string[];
+	/** Absolute file paths that were written. */
 	filePaths: string[];
+	/** Whether the changes were pushed to a remote. */
 	pushed: boolean;
 }
 
+/** A single file to be written into the repository. */
 export interface FileWriteRequest {
+	/** Relative path within the repository. */
 	path: string;
+	/** UTF-8 content to write. */
 	content: string;
 }
 
+/** Options for controlling branch behaviour during publish. */
 export interface PublishOptions {
+	/** Target branch name (defaults to `'main'`). */
 	branchName?: string;
+	/** Base branch to create the target from if it doesn't exist (defaults to `'main'`). */
 	baseBranch?: string;
 }
 
+/**
+ * Manages git operations for writing and publishing generated content
+ * to a target repository.
+ *
+ * Wraps `simple-git` to provide higher-level helpers for staging,
+ * committing, and pushing files — used by the daily-note and artifact
+ * publishing workflows.
+ */
 export class GitService {
 	private git: SimpleGit | null = null;
 	private repoPath: string = '';
 
+	/**
+	 * Bind the service to a local repository path.
+	 *
+	 * @param repoPath - Absolute path to an existing git repository.
+	 * @returns `true` if the repository was successfully initialised,
+	 *   `false` if the path is missing or not a git repo.
+	 */
 	async initialize(repoPath: string): Promise<boolean> {
 		if (!existsSync(repoPath)) {
 			logger.warn(`Target repository path does not exist: ${repoPath}`);
@@ -48,6 +74,13 @@ export class GitService {
 		}
 	}
 
+	/**
+	 * Generate a daily note file, commit it, and push to the remote.
+	 *
+	 * @param content - Markdown content for the daily note.
+	 * @param commitMessage - Git commit message.
+	 * @returns A {@link GitPublishResult} on success, or `null` on failure.
+	 */
 	async addCommitPush(content: string, commitMessage: string): Promise<GitPublishResult | null> {
 		if (!this.git) {
 			throw new Error('Git service not initialized');
@@ -63,6 +96,17 @@ export class GitService {
 		}
 	}
 
+	/**
+	 * Write one or more files, commit them, and optionally push.
+	 *
+	 * Creates intermediate directories as needed. Uses an atomic
+	 * `--set-upstream` push when a remote is configured.
+	 *
+	 * @param files - Files to write and stage.
+	 * @param commitMessage - Git commit message.
+	 * @param options - Optional branch overrides.
+	 * @returns A {@link GitPublishResult} on success, or `null` on failure.
+	 */
 	async writeAndPublish(
 		files: FileWriteRequest[],
 		commitMessage: string,
@@ -108,6 +152,7 @@ export class GitService {
 		}
 	}
 
+	/** Return a JSON-formatted summary of the current git status. */
 	async getStatus(): Promise<string> {
 		if (!this.git) {
 			throw new Error('Git service not initialized');
@@ -117,6 +162,7 @@ export class GitService {
 		return JSON.stringify(status, null, 2);
 	}
 
+	/** Check whether the working tree has any uncommitted changes. */
 	async hasLocalChanges(): Promise<boolean> {
 		if (!this.git) {
 			throw new Error('Git service not initialized');
